@@ -1,0 +1,26 @@
+name = "ai-rotom-discord-remote"
+main = "src/index.ts"
+compatibility_date = "2025-07-15"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+# DISCORD_PUBLIC_KEY = ""
+# DISCORD_APPLICATION_ID = ""
+# DISCORD_TOKEN = ""
+# OPENCODE_GO_API_KEY = ""
+OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
+MCP_BRIDGE_URL = "https://ai-rotom-bridge.kajilab.work"
+# ALLOWED_CHANNEL_IDS = ""
+# CF_ACCESS_CLIENT_ID = ""
+# CF_ACCESS_CLIENT_SECRET = ""
+
+[[durable_objects.bindings]]
+name = "CONVERSATION_SESSION"
+class_name = "ConversationSession"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ConversationSession"]
+
+[observability]
+enabled = true
