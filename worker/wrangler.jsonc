@@ -1,0 +1,33 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cloudflare/workers-sdk/main/templates/ts/config-schema.json",
+  "name": "ai-rotom-discord-remote",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-07-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "DISCORD_PUBLIC_KEY": "",
+    "DISCORD_APPLICATION_ID": "",
+    "DISCORD_TOKEN": "",
+    "OPENCODE_GO_API_KEY": "",
+    "OPENCODE_GO_BASE_URL": "https://opencode.ai/zen/go/v1",
+    "MCP_BRIDGE_URL": "https://ai-rotom-bridge.local",
+    "ALLOWED_CHANNEL_IDS": ""
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "class_name": "ConversationSession",
+        "name": "CONVERSATION_SESSION"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": ["ConversationSession"]
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}
