@@ -58,11 +58,17 @@ export async function executeToolCallLoop(
       baseUrl,
     );
 
-    if (finishReason === "stop" || (finishReason === "tool_calls" && toolCalls.length === 0)) {
+    if (finishReason === "stop") {
+      if (content) {
+        messages.push({ role: "assistant", content });
+      }
       return messages;
     }
 
     if (toolCalls.length === 0) {
+      if (content) {
+        messages.push({ role: "assistant", content });
+      }
       return messages;
     }
 

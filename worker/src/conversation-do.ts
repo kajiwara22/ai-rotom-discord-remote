@@ -1,16 +1,53 @@
 import { DurableObject } from "cloudflare:workers";
-import type { ChatMessage, ToolDefinition } from "./types";
+import type { ChatMessage } from "./types";
 import { executeToolCallLoop } from "./ai";
 import { TOOL_DEFINITIONS, getSystemPrompt } from "./tool-definitions";
 
 const SESSION_TTL_MINUTES = 30;
 
-export class ConversationSession extends DurableObject {
-  private messages: ChatMessage[] = [];
-  private currentProcessing: Promise<void> | null = null;
+export class ConversationSession extends DurableObject<Record<string, never>> {
+  private sql: SqlStorage;
 
-  async initialize(): Promise<void> {
-    // システムメッセージのみ初期化
+  constructor(ctx: DurableObjectState, env: Record<string, never>) {
+    super(ctx, env);
+    this.sql = ctx.storage.sql;
+
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      role TEXT NOT NULL,
+      content TEXT,
+      tool_call_id TEXT,
+      tool_calls_json TEXT,
+      created_at INTEGER DEFAULT (unixepoch())
+    )`);
+  }
+
+  private loadMessages(): ChatMessage[] {
+    const rows = this.sql.exec("SELECT role, content, tool_call_id, tool_calls_json FROM messages ORDER BY id ASC");
+    const messages: ChatMessage[] = [];
+    for (const row of rows) {
+      const msg: ChatMessage = {
+        role: row.role as ChatMessage["role"],
+        content: row.content as string | null,
+      };
+      if (row.tool_call_id) msg.tool_call_id = row.tool_call_id as string;
+      if (row.tool_calls_json) msg.tool_calls = JSON.parse(row.tool_calls_json as string);
+      messages.push(msg);
+    }
+    return messages;
+  }
+
+  private saveMessages(messages: ChatMessage[]): void {
+    this.sql.exec("DELETE FROM messages");
+    for (const msg of messages) {
+      this.sql.exec(
+        "INSERT INTO messages (role, content, tool_call_id, tool_calls_json) VALUES (?, ?, ?, ?)",
+        msg.role,
+        msg.content,
+        msg.tool_call_id ?? null,
+        msg.tool_calls ? JSON.stringify(msg.tool_calls) : null,
+      );
+    }
   }
 
   async ask(
@@ -18,32 +55,38 @@ export class ConversationSession extends DurableObject {
     apiKey: string,
     baseUrl: string,
     bridgeUrl: string,
+    accessClientId: string,
+    accessClientSecret: string,
     applicationId: string,
     interactionToken: string,
   ): Promise<void> {
-    // 初回メッセージの場合、システムプロンプトを追加
-    if (this.messages.length === 0) {
-      this.messages.push({ role: "system", content: getSystemPrompt() });
+    let messages = this.loadMessages();
+
+    if (messages.length === 0) {
+      messages.push({ role: "system", content: getSystemPrompt() });
     }
 
-    this.messages.push({ role: "user", content: userMessage });
+    messages.push({ role: "user", content: userMessage });
 
-    // 上限を超えたら古いメッセージを切り捨て（システム+最新20件）
-    if (this.messages.length > 22) {
-      const systemMsg = this.messages[0];
-      this.messages = [systemMsg, ...this.messages.slice(-20)];
+    if (messages.length > 22) {
+      const systemMsg = messages[0];
+      messages = [systemMsg, ...messages.slice(-20)];
     }
 
     try {
       const resultMessages = await executeToolCallLoop(
-        this.messages,
-        TOOL_DEFINITIONS as ToolDefinition[],
+        messages,
+        TOOL_DEFINITIONS,
         apiKey,
         baseUrl,
         async (toolName, args) => {
           const response = await fetch(`${bridgeUrl}/tools/${toolName}`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              "CF-Access-Client-Id": accessClientId,
+              "CF-Access-Client-Secret": accessClientSecret,
+            },
             body: JSON.stringify(args),
           });
           if (!response.ok) {
@@ -54,7 +97,7 @@ export class ConversationSession extends DurableObject {
         },
       );
 
-      this.messages = resultMessages;
+      this.saveMessages(resultMessages);
 
       const lastAssistant = [...resultMessages].reverse().find((m) => m.role === "assistant" && m.content);
       const answer = lastAssistant?.content ?? "回答を生成できませんでした。";
@@ -79,17 +122,15 @@ export class ConversationSession extends DurableObject {
       );
     }
 
-    // セッションTTLをリセット
     await this.ctx.storage.setAlarm(Date.now() + SESSION_TTL_MINUTES * 60 * 1000);
   }
 
   async reset(): Promise<void> {
-    this.messages = [];
+    this.sql.exec("DELETE FROM messages");
     await this.ctx.storage.deleteAlarm();
   }
 
   async alarm(): Promise<void> {
-    // セッション期限切れ → 破棄
-    this.messages = [];
+    this.sql.exec("DELETE FROM messages");
   }
 }

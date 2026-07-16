@@ -73,6 +73,8 @@ async function handleInteraction(request: Request, env: Env, ctx: ExecutionConte
           env.OPENCODE_GO_API_KEY,
           env.OPENCODE_GO_BASE_URL,
           env.MCP_BRIDGE_URL,
+          env.CF_ACCESS_CLIENT_ID,
+          env.CF_ACCESS_CLIENT_SECRET,
           interaction.application_id,
           interaction.token,
         ),
@@ -143,6 +145,8 @@ interface Env {
   OPENCODE_GO_API_KEY: string;
   OPENCODE_GO_BASE_URL: string;
   MCP_BRIDGE_URL: string;
+  CF_ACCESS_CLIENT_ID: string;
+  CF_ACCESS_CLIENT_SECRET: string;
   ALLOWED_CHANNEL_IDS?: string;
   CONVERSATION_SESSION: DurableObjectNamespace<ConversationSession>;
 }
