@@ -12,6 +12,9 @@ else
     ACCESS_URL="http://localhost:3000"
 fi
 
+# ブラウザ自動起動を抑止（Codespaces には xdg-open が無いため）
+export BROWSER=none
+
 # Display startup message
 echo ""
 echo "============================================"
