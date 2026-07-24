@@ -4,6 +4,22 @@
 
 set -e
 
+# --- xdg-open ダミーコマンドの作成 ---
+# Codespaces のコンテナには xdg-open が存在せず、
+# OpenCode がブラウザ起動を試みてクラッシュするため、
+# 呼ばれても何もせず正常終了するダミーを配置する。
+if ! command -v xdg-open >/dev/null 2>&1; then
+    DUMMY_BIN="$HOME/.local/bin"
+    mkdir -p "$DUMMY_BIN"
+    cat > "$DUMMY_BIN/xdg-open" <<'EOF'
+#!/bin/bash
+# ブラウザ自動起動を抑止するためのダミー。何もせず正常終了する。
+exit 0
+EOF
+    chmod +x "$DUMMY_BIN/xdg-open"
+    export PATH="$DUMMY_BIN:$PATH"
+fi
+
 # Build the access URL
 if [ -n "$CODESPACE_NAME" ] && [ -n "$GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN" ]; then
     ACCESS_URL="https://${CODESPACE_NAME}-3000.${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN}"
