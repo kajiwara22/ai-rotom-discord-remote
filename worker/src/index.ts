@@ -71,20 +71,33 @@ async function handleInteraction(request: Request, env: Env, ctx: ExecutionConte
         });
       }
 
+      console.log(`[worker] /ask 受信: channel=${channelId} message="${userMessage.substring(0, 80)}"`);
+
       ctx.waitUntil(
-        fetch(`${piUrl}/ask`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            userMessage,
-            channelId,
-            guildId: interaction.guild_id ?? null,
-            applicationId: interaction.application_id,
-            interactionToken: interaction.token,
-          }),
-        }).catch((err) => {
-          console.error("[worker] Pi への転送失敗:", err);
-        }),
+        (async () => {
+          try {
+            const targetUrl = `${piUrl}/ask`;
+            console.log(`[worker] Pi へ転送: ${targetUrl}`);
+            const res = await fetch(targetUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                userMessage,
+                channelId,
+                guildId: interaction.guild_id ?? null,
+                applicationId: interaction.application_id,
+                interactionToken: interaction.token,
+              }),
+            });
+            console.log(`[worker] Pi 応答: status=${res.status}`);
+            if (!res.ok) {
+              const body = await res.text();
+              console.error(`[worker] Pi エラー応答: ${body.substring(0, 500)}`);
+            }
+          } catch (err) {
+            console.error("[worker] Pi への転送失敗:", err);
+          }
+        })(),
       );
 
       return jsonResponse(deferredResponse());
