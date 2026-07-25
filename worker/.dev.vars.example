@@ -1,7 +1,5 @@
 DISCORD_PUBLIC_KEY=your_discord_public_key
 DISCORD_APPLICATION_ID=your_application_id
 DISCORD_TOKEN=your_bot_token
-OPENCODE_GO_API_KEY=your_opencode_go_api_key
-OPENCODE_GO_BASE_URL=https://opencode.ai/zen/go/v1
-MCP_BRIDGE_URL=https://ai-rotom-bridge.local
+PI_BRIDGE_URL=http://localhost:3210
 ALLOWED_CHANNEL_IDS=

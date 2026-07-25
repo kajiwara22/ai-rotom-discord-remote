@@ -1,20 +1,38 @@
-// Discord types
 export interface DiscordInteraction {
-  type: number;
+  type: InteractionType;
   id: string;
   application_id: string;
   channel_id?: string;
   guild_id?: string;
   token: string;
-  data?: {
-    name: string;
-    options?: Array<{ name: string; value: string }>;
-  };
-  member?: { user: { id: string; username: string } };
-  user?: { id: string; username: string };
+  data?: InteractionData;
+  member?: { user: DiscordUser };
+  user?: DiscordUser;
 }
 
-// Chat message types
+export enum InteractionType {
+  PING = 1,
+  APPLICATION_COMMAND = 2,
+  MESSAGE_COMPONENT = 3,
+  APPLICATION_COMMAND_AUTOCOMPLETE = 4,
+}
+
+export interface InteractionData {
+  name: string;
+  options?: InteractionOption[];
+}
+
+export interface InteractionOption {
+  name: string;
+  type: number;
+  value?: string | number | boolean;
+}
+
+export interface DiscordUser {
+  id: string;
+  username: string;
+}
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string | null;
@@ -41,7 +59,12 @@ export interface ToolDefinition {
   };
 }
 
-// OpenCode Go API response
+export interface MCPToolResult {
+  success: boolean;
+  result?: unknown;
+  error?: string;
+}
+
 export interface OpenCodeGoResponse {
   id: string;
   object: string;
@@ -58,35 +81,25 @@ export interface OpenCodeGoResponse {
   }[];
 }
 
-// Session types
 export interface ConversationSession {
-  session_id: string;
-  channel_id: string;
-  guild_id?: string;
-  created_at: number;
-  updated_at: number;
-  expires_at: number;
+  sessionId: string;
+  channelId: string;
+  guildId: string | null;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt: number;
+  isActive: boolean;
 }
 
-// Request/Response types for /ask endpoint
 export interface AskRequest {
-  command: string;
-  user_message: string;
-  channel_id: string;
-  application_id: string;
-  token: string;
-  timestamp: number;
+  userMessage: string;
+  channelId: string;
+  guildId?: string;
+  applicationId: string;
+  interactionToken: string;
 }
 
 export interface AskResponse {
   success: boolean;
-  session_id?: string;
-  error?: string;
-}
-
-// MCP Bridge response
-export interface MCPToolResult {
-  success: boolean;
-  result?: unknown;
   error?: string;
 }

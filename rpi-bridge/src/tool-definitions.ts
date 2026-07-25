@@ -1,7 +1,6 @@
-import type { ToolDefinition } from "./types";
+import type { ToolDefinition } from "./types.js";
 
 export const TOOL_DEFINITIONS: ToolDefinition[] = [
-  // ===== 情報取得系 =====
   {
     type: "function",
     function: {
@@ -113,7 +112,6 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
 
-  // ===== 検索系 =====
   {
     type: "function",
     function: {
@@ -177,7 +175,6 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
 
-  // ===== 計算系 =====
   {
     type: "function",
     function: {
@@ -375,7 +372,6 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
 
-  // ===== 分析系 =====
   {
     type: "function",
     function: {
@@ -483,7 +479,6 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
 
-  // ===== パーティ永続化 =====
   {
     type: "function",
     function: {

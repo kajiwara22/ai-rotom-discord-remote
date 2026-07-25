@@ -8,19 +8,22 @@ export async function chatCompletion(
   apiKey: string,
   baseUrl: string,
 ): Promise<{ content: string | null; toolCalls: ToolCall[]; finishReason: string }> {
+  const payload = JSON.stringify({
+    model: MODEL,
+    messages,
+    tools,
+    tool_choice: "auto",
+    max_tokens: 4096,
+  });
+  console.log(`[chatCompletion] payloadSize=${payload.length} messages=${messages.length}`);
+
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({
-      model: MODEL,
-      messages,
-      tools,
-      tool_choice: "auto",
-      max_tokens: 4096,
-    }),
+    body: payload,
   });
 
   if (!response.ok) {

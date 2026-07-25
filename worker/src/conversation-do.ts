@@ -1,9 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
-import type { ChatMessage } from "./types";
+import type { ChatMessage, PendingAsk } from "./types";
 import { executeToolCallLoop } from "./ai";
 import { TOOL_DEFINITIONS, getSystemPrompt } from "./tool-definitions";
 
 const SESSION_TTL_MINUTES = 30;
+const PENDING_ASK_KEY = "pendingAsk";
+const MAX_TOOL_RESULT = 2000;
+const MAX_MESSAGES = 16;
 
 export class ConversationSession extends DurableObject<Record<string, never>> {
   private sql: SqlStorage;
@@ -40,17 +43,21 @@ export class ConversationSession extends DurableObject<Record<string, never>> {
   private saveMessages(messages: ChatMessage[]): void {
     this.sql.exec("DELETE FROM messages");
     for (const msg of messages) {
+      let content = msg.content;
+      if (msg.role === "tool" && content && content.length > MAX_TOOL_RESULT) {
+        content = content.slice(0, MAX_TOOL_RESULT) + "\n...(省略)";
+      }
       this.sql.exec(
         "INSERT INTO messages (role, content, tool_call_id, tool_calls_json) VALUES (?, ?, ?, ?)",
         msg.role,
-        msg.content,
+        content,
         msg.tool_call_id ?? null,
         msg.tool_calls ? JSON.stringify(msg.tool_calls) : null,
       );
     }
   }
 
-  async ask(
+  async enqueueAsk(
     userMessage: string,
     apiKey: string,
     baseUrl: string,
@@ -60,50 +67,96 @@ export class ConversationSession extends DurableObject<Record<string, never>> {
     applicationId: string,
     interactionToken: string,
   ): Promise<void> {
+    const pending: PendingAsk = {
+      userMessage,
+      apiKey,
+      baseUrl,
+      bridgeUrl,
+      accessClientId,
+      accessClientSecret,
+      applicationId,
+      interactionToken,
+    };
+    await this.ctx.storage.put(PENDING_ASK_KEY, pending);
+    await this.ctx.storage.setAlarm(Date.now());
+  }
+
+  async reset(): Promise<void> {
+    this.sql.exec("DELETE FROM messages");
+    await this.ctx.storage.delete(PENDING_ASK_KEY);
+    await this.ctx.storage.deleteAlarm();
+  }
+
+  async alarm(): Promise<void> {
+    const pending = await this.ctx.storage.get<PendingAsk>(PENDING_ASK_KEY);
+
+    if (pending) {
+      await this.ctx.storage.delete(PENDING_ASK_KEY);
+      await this.processAsk(pending);
+      await this.ctx.storage.setAlarm(Date.now() + SESSION_TTL_MINUTES * 60 * 1000);
+    } else {
+      this.sql.exec("DELETE FROM messages");
+    }
+  }
+
+  private async processAsk(pending: PendingAsk): Promise<void> {
     let messages = this.loadMessages();
 
     if (messages.length === 0) {
       messages.push({ role: "system", content: getSystemPrompt() });
     }
 
-    messages.push({ role: "user", content: userMessage });
+    messages.push({ role: "user", content: pending.userMessage });
 
-    if (messages.length > 22) {
+    if (messages.length > MAX_MESSAGES) {
       const systemMsg = messages[0];
-      messages = [systemMsg, ...messages.slice(-20)];
+      messages = [systemMsg, ...messages.slice(-(MAX_MESSAGES - 1))];
     }
+
+    const totalChars = messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
+    console.log(`[processAsk] messages=${messages.length} totalChars=${totalChars}`);
 
     try {
       const resultMessages = await executeToolCallLoop(
         messages,
         TOOL_DEFINITIONS,
-        apiKey,
-        baseUrl,
+        pending.apiKey,
+        pending.baseUrl,
         async (toolName, args) => {
-          const response = await fetch(`${bridgeUrl}/tools/${toolName}`, {
+          const response = await fetch(`${pending.bridgeUrl}/tools/${toolName}`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              "CF-Access-Client-Id": accessClientId,
-              "CF-Access-Client-Secret": accessClientSecret,
+              "CF-Access-Client-Id": pending.accessClientId,
+              "CF-Access-Client-Secret": pending.accessClientSecret,
             },
             body: JSON.stringify(args),
           });
           if (!response.ok) {
             return JSON.stringify({ success: false, error: `Bridge error: ${response.status}` });
           }
-          const result = await response.json() as { success: boolean; result?: unknown; error?: string };
-          return JSON.stringify(result.success ? result.result : { error: result.error });
+          const bridgeResult = await response.json() as {
+            success: boolean;
+            result?: { content?: Array<{ type: string; text?: string }> };
+            error?: string;
+          };
+          if (!bridgeResult.success) {
+            return JSON.stringify({ success: false, error: bridgeResult.error });
+          }
+          const text = bridgeResult.result?.content?.[0]?.text
+            ?? JSON.stringify(bridgeResult.result);
+          return text.length > MAX_TOOL_RESULT ? text.slice(0, MAX_TOOL_RESULT) + "\n...(省略)" : text;
         },
       );
 
       this.saveMessages(resultMessages);
 
       const lastAssistant = [...resultMessages].reverse().find((m) => m.role === "assistant" && m.content);
-      const answer = lastAssistant?.content ?? "回答を生成できませんでした。";
+      const body = lastAssistant?.content ?? "回答を生成できませんでした。";
+      const answer = `> ${pending.userMessage}\n${body}`;
 
       await fetch(
-        `https://discord.com/api/v10/webhooks/${applicationId}/${interactionToken}/messages/@original`,
+        `https://discord.com/api/v10/webhooks/${pending.applicationId}/${pending.interactionToken}/messages/@original`,
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -113,7 +166,7 @@ export class ConversationSession extends DurableObject<Record<string, never>> {
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : "不明なエラー";
       await fetch(
-        `https://discord.com/api/v10/webhooks/${applicationId}/${interactionToken}/messages/@original`,
+        `https://discord.com/api/v10/webhooks/${pending.applicationId}/${pending.interactionToken}/messages/@original`,
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -121,16 +174,5 @@ export class ConversationSession extends DurableObject<Record<string, never>> {
         },
       );
     }
-
-    await this.ctx.storage.setAlarm(Date.now() + SESSION_TTL_MINUTES * 60 * 1000);
-  }
-
-  async reset(): Promise<void> {
-    this.sql.exec("DELETE FROM messages");
-    await this.ctx.storage.deleteAlarm();
-  }
-
-  async alarm(): Promise<void> {
-    this.sql.exec("DELETE FROM messages");
   }
 }

@@ -65,6 +65,17 @@ export interface MCPToolResult {
   error?: string;
 }
 
+export interface PendingAsk {
+  userMessage: string;
+  apiKey: string;
+  baseUrl: string;
+  bridgeUrl: string;
+  accessClientId: string;
+  accessClientSecret: string;
+  applicationId: string;
+  interactionToken: string;
+}
+
 export interface ConversationState {
   guildId: string;
   channelId: string;

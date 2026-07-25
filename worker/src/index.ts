@@ -1,19 +1,14 @@
 import { InteractionType } from "./types";
-import { verifySignature, jsonResponse, deferredResponse, editOriginalResponse, pingResponse } from "./discord";
-import { ConversationSession } from "./conversation-do";
-
-export { ConversationSession };
+import { verifySignature, jsonResponse, deferredResponse, pingResponse } from "./discord";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
-    // スラッシュコマンド登録用
     if (url.pathname === "/register" && request.method === "POST") {
       return handleRegisterCommands(request, env);
     }
 
-    // Discord Interactions
     if (url.pathname === "/interactions") {
       return handleInteraction(request, env, ctx);
     }
@@ -39,6 +34,7 @@ async function handleInteraction(request: Request, env: Env, ctx: ExecutionConte
     application_id: string;
     token: string;
     channel_id?: string;
+    guild_id?: string;
     data?: { name: string; options?: Array<{ name: string; value: string }> };
   };
 
@@ -50,7 +46,6 @@ async function handleInteraction(request: Request, env: Env, ctx: ExecutionConte
     const commandName = interaction.data?.name;
     const channelId = interaction.channel_id ?? "dm";
 
-    // 許可チャンネルチェック
     const allowedChannels = env.ALLOWED_CHANNEL_IDS?.split(",").map((c) => c.trim()).filter(Boolean) ?? [];
     if (allowedChannels.length > 0 && !allowedChannels.includes(channelId)) {
       return jsonResponse({
@@ -61,32 +56,53 @@ async function handleInteraction(request: Request, env: Env, ctx: ExecutionConte
 
     if (commandName === "ask") {
       const userMessage = interaction.data?.options?.find((o) => o.name === "message")?.value ?? "";
+      if (!userMessage) {
+        return jsonResponse({
+          type: 4,
+          data: { content: "質問内容を入力してください。", flags: 64 },
+        });
+      }
 
-      // DO スタブを取得
-      const doId = env.CONVERSATION_SESSION.idFromName(`channel:${channelId}`);
-      const session = env.CONVERSATION_SESSION.get(doId);
+      const piUrl = env.PI_BRIDGE_URL;
+      if (!piUrl) {
+        return jsonResponse({
+          type: 4,
+          data: { content: "サーバー設定エラー: PI_BRIDGE_URL が設定されていません。", flags: 64 },
+        });
+      }
 
-      // 非同期処理を DO に委譲
       ctx.waitUntil(
-        session.ask(
-          userMessage,
-          env.OPENCODE_GO_API_KEY,
-          env.OPENCODE_GO_BASE_URL,
-          env.MCP_BRIDGE_URL,
-          env.CF_ACCESS_CLIENT_ID,
-          env.CF_ACCESS_CLIENT_SECRET,
-          interaction.application_id,
-          interaction.token,
-        ),
+        fetch(`${piUrl}/ask`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userMessage,
+            channelId,
+            guildId: interaction.guild_id ?? null,
+            applicationId: interaction.application_id,
+            interactionToken: interaction.token,
+          }),
+        }).catch((err) => {
+          console.error("[worker] Pi への転送失敗:", err);
+        }),
       );
 
       return jsonResponse(deferredResponse());
     }
 
     if (commandName === "reset") {
-      const doId = env.CONVERSATION_SESSION.idFromName(`channel:${channelId}`);
-      const session = env.CONVERSATION_SESSION.get(doId);
-      ctx.waitUntil(session.reset());
+      const piUrl = env.PI_BRIDGE_URL;
+      if (piUrl) {
+        ctx.waitUntil(
+          fetch(`${piUrl}/reset`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ channelId }),
+          }).catch((err) => {
+            console.error("[worker] Pi へのリセット転送失敗:", err);
+          }),
+        );
+      }
 
       return jsonResponse({
         type: 4,
@@ -142,11 +158,6 @@ interface Env {
   DISCORD_PUBLIC_KEY: string;
   DISCORD_APPLICATION_ID: string;
   DISCORD_TOKEN: string;
-  OPENCODE_GO_API_KEY: string;
-  OPENCODE_GO_BASE_URL: string;
-  MCP_BRIDGE_URL: string;
-  CF_ACCESS_CLIENT_ID: string;
-  CF_ACCESS_CLIENT_SECRET: string;
+  PI_BRIDGE_URL: string;
   ALLOWED_CHANNEL_IDS?: string;
-  CONVERSATION_SESSION: DurableObjectNamespace<ConversationSession>;
 }
