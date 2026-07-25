@@ -10,6 +10,10 @@ compatibility_flags = ["nodejs_compat"]
 PI_BRIDGE_URL = "https://ai-rotom-bridge.kajilab.work"
 # ALLOWED_CHANNEL_IDS = ""
 
+[[migrations]]
+tag = "v2"
+deleted_classes = ["ConversationSession"]
+
 [observability]
 enabled = true
 
