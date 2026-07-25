@@ -11,7 +11,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
     "@nonz250/ai-rotom": "^1.2.0",
-    "better-sqlite3": "^11.10.0"
+    "better-sqlite3": "^13.0.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
