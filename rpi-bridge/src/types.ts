@@ -103,3 +103,41 @@ export interface AskResponse {
   success: boolean;
   error?: string;
 }
+
+// Web用型
+export interface WebAskRequest {
+  user_id: string;
+  session_id?: string;
+  message: string;
+}
+
+export interface WebAskResponse {
+  session_id: string;
+  reply: string;
+}
+
+export interface WebResetRequest {
+  user_id: string;
+  session_id: string;
+}
+
+export interface SessionInfo {
+  session_id: string;
+  user_id: string;
+  session_name: string;
+  created_at: number;
+  updated_at: number;
+  message_count: number;
+}
+
+export interface UserInfo {
+  user_id: string;
+  display_name: string;
+  created_at: number;
+}
+
+export interface SystemPromptInfo {
+  user_id: string;
+  prompt_text: string;
+  updated_at: number;
+}
