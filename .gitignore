@@ -3,3 +3,32 @@ dist/
 .dev.vars
 .wrangler/
 *.log
+
+# ---------------------------------------------------------------------------
+# ポケモンイラストラボ素材（再配布不可）
+#
+# 教育・保育目的で提供されている素材のため、リポジトリには含めない。
+# 下記は scripts/setup-pokemon-assets.sh で ZIP から生成する。
+#   https://www.pokemon.jp/special/illust-lab
+# ---------------------------------------------------------------------------
+
+# ダウンロードした ZIP と、その展開物
+pokemon_illust_lab_*.zip
+rpi-bridge/public/img/pokemon_illust_lab_*/
+
+# スクリプトが生成するアバター画像
+rpi-bridge/public/img/avatars/
+
+# UI 検討用モック
+# 実装に置き換わったため管理対象外。画像も再配布不可でクローン先では動かない。
+# 設計の意図は README と docs/adr/ADR-0001.md に記録済み。
+docs/ui-mock/
+
+# macOS
+.DS_Store
+
+# Playwright CLI
+.playwright-cli/
+
+# Mise
+.mise.toml
