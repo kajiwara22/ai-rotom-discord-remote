@@ -249,12 +249,11 @@ export async function runAskForWeb(
     ctx.bridgeUrl,
   );
 
+  // 新規セッションは最初の発言をそのままセッション名にする。
+  // 日時は一覧側で updated_at から相対表示するため、名前には含めない。
   const isNewSession = !ctx.sessionId;
   if (isNewSession && userMessage.trim().length > 0) {
-    const now = new Date();
-    const ts = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-    const preview = userMessage.replace(/\n/g, " ").trim().slice(0, 30);
-    const name = `${ts} - ${preview}`;
+    const name = userMessage.replace(/\s+/g, " ").trim().slice(0, 40);
     updateSessionName(session.sessionId, name);
   }
 
