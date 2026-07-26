@@ -4,6 +4,31 @@ import fs from "node:fs";
 
 const DEFAULT_DB_PATH = "/tmp/rotom-conversations.db";
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Discord チャンネル会話の保持期間（30分）。
+ * チャンネルは不特定多数が使うため、短時間で文脈を切る。
+ */
+export const SESSION_TTL_MS = 30 * 60 * 1000;
+
+/**
+ * Web チャットの保持期間（既定 30日）。
+ * 家族が「前に聞いた会話の続き」を後日たどれるよう、Discord より大幅に長くする。
+ * WEB_SESSION_TTL_DAYS で変更可能。
+ */
+function resolveWebTtlDays(): number {
+  const raw = Number(process.env.WEB_SESSION_TTL_DAYS ?? 30);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    console.warn(`[db] WEB_SESSION_TTL_DAYS が不正なため既定値 30 を使用します: ${process.env.WEB_SESSION_TTL_DAYS}`);
+    return 30;
+  }
+  return raw;
+}
+
+export const WEB_SESSION_TTL_DAYS = resolveWebTtlDays();
+export const WEB_SESSION_TTL_MS = WEB_SESSION_TTL_DAYS * DAY_MS;
+
 let db: Database.Database | null = null;
 
 export function getDb(): Database.Database {
@@ -97,6 +122,28 @@ function migrateConversationsTable(): void {
 
   // Web用インデックス（なければ作成）
   d.exec("CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id)");
+
+  extendWebSessionExpiry();
+}
+
+/**
+ * 旧仕様（30分TTL）で作られた Web セッションの期限を新しい保持期間へ引き延ばす。
+ * これを行わないと、TTL を延ばした直後の起動で既存の履歴がまとめて削除されてしまう。
+ * 条件付き UPDATE なので毎回実行しても安全。
+ */
+function extendWebSessionExpiry(): void {
+  const d = db!;
+
+  const result = d.prepare(
+    `UPDATE conversations
+        SET expires_at = updated_at + ?
+      WHERE session_id LIKE 'user:%'
+        AND expires_at < updated_at + ?`,
+  ).run(WEB_SESSION_TTL_MS, WEB_SESSION_TTL_MS);
+
+  if (result.changes > 0) {
+    console.log(`[db] マイグレーション: Webセッション ${result.changes} 件の保持期間を ${WEB_SESSION_TTL_DAYS} 日へ延長`);
+  }
 }
 
 function migrateUsersTable(): void {

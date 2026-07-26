@@ -1,9 +1,7 @@
 import type { ChatMessage, ConversationSession, SessionInfo, UserInfo, UserMode } from "./types.js";
 import { getSystemPrompt, DISCORD_RESTRICTIONS } from "./tool-definitions.js";
-import { getDb } from "./db.js";
+import { getDb, SESSION_TTL_MS, WEB_SESSION_TTL_MS } from "./db.js";
 import crypto from "node:crypto";
-
-const SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_TOOL_RESULT = 2000;
 const MAX_MESSAGES = 20;
 
@@ -309,7 +307,8 @@ export function getOrCreateWebSession(
     ).get(sid, userId) as Record<string, unknown> | undefined;
 
     if (row) {
-      const newExpiresAt = now + SESSION_TTL_MS;
+      // Web は Discord より長期（既定 30日）。アクセスのたびに期限を延長する
+      const newExpiresAt = now + WEB_SESSION_TTL_MS;
       db.prepare(
         "UPDATE conversations SET updated_at = ?, expires_at = ?, is_active = 1 WHERE session_id = ?",
       ).run(now, newExpiresAt, sid);
@@ -328,7 +327,7 @@ export function getOrCreateWebSession(
 
   const newSessionId = crypto.randomUUID();
   const sid = webSessionId(userId, newSessionId);
-  const expiresAt = now + SESSION_TTL_MS;
+  const expiresAt = now + WEB_SESSION_TTL_MS;
 
   db.prepare(
     "INSERT INTO conversations (session_id, channel_id, guild_id, created_at, updated_at, expires_at, is_active, user_id, session_name) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
