@@ -80,7 +80,11 @@ async function handleInteraction(request: Request, env: Env, ctx: ExecutionConte
             console.log(`[worker] Pi へ転送: ${targetUrl}`);
             const res = await fetch(targetUrl, {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: {
+                "Content-Type": "application/json",
+                "CF-Access-Client-Id": env.CF_ACCESS_CLIENT_ID,
+                "CF-Access-Client-Secret": env.CF_ACCESS_CLIENT_SECRET,
+              },
               body: JSON.stringify({
                 userMessage,
                 channelId,
@@ -109,7 +113,11 @@ async function handleInteraction(request: Request, env: Env, ctx: ExecutionConte
         ctx.waitUntil(
           fetch(`${piUrl}/reset`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              "CF-Access-Client-Id": env.CF_ACCESS_CLIENT_ID,
+              "CF-Access-Client-Secret": env.CF_ACCESS_CLIENT_SECRET,
+            },
             body: JSON.stringify({ channelId }),
           }).catch((err) => {
             console.error("[worker] Pi へのリセット転送失敗:", err);
@@ -172,5 +180,7 @@ interface Env {
   DISCORD_APPLICATION_ID: string;
   DISCORD_TOKEN: string;
   PI_BRIDGE_URL: string;
+  CF_ACCESS_CLIENT_ID: string;
+  CF_ACCESS_CLIENT_SECRET: string;
   ALLOWED_CHANNEL_IDS?: string;
 }
