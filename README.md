@@ -258,11 +258,12 @@ npx wrangler secret put PI_BRIDGE_URL
 
 ```bash
 cd deploy/caddy
-cp .env.example .env
+cp .mise.toml.example .mise.toml
 mkdir -p logs
-# .env にドメインと Cloudflare API トークンを設定
+# .mise.toml の [env] にドメインと Cloudflare API トークンを設定
 
-docker compose up -d --build
+mise trust
+mise run up
 ```
 
 **手順の詳細（API トークンの発行、DNS レコードの作成、トラブルシューティング）は [deploy/caddy/README.md](deploy/caddy/README.md) を参照してください。** 設計上の判断は [ADR-0002](docs/adr/ADR-0002.md) に記録しています。
@@ -437,7 +438,7 @@ ai-rotom-discord-remote/
 │       ├── Dockerfile             # Cloudflare DNS モジュール入り Caddy のビルド
 │       ├── docker-compose.yml
 │       ├── Caddyfile
-│       ├── .env.example
+│       ├── .mise.toml.example     # 環境変数と操作タスク（コピーして使う）
 │       └── README.md              # 手順書・トラブルシューティング
 ├── scripts/
 │   ├── setup-pokemon-assets.sh    # イラストラボ素材の展開・リサイズ

@@ -4,7 +4,10 @@ dist/
 .wrangler/
 *.log
 
-# Caddy（TLS 終端）の設定と Cloudflare API トークン
+# Caddy（TLS 終端）のログ
+# 環境変数と Cloudflare API トークンは deploy/caddy/.mise.toml に置く。
+# 下の Mise セクションで除外しているため、ここには書かない。
+# mise を使わず .env で渡す場合に備えて、そちらも除外しておく。
 deploy/caddy/.env
 deploy/caddy/logs/
 

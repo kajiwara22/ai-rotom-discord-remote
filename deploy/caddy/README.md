@@ -19,6 +19,7 @@ Raspberry Pi
 - ドメインを Cloudflare で管理していること（ネームサーバーが Cloudflare を向いている）
 - Raspberry Pi に Docker と Docker Compose プラグインが入っていること
 - Pi の LAN IP が固定されていること（DHCP 予約か静的割り当て）
+- [mise](https://mise.jdx.dev/) が入っていること（環境変数と操作タスクの管理に使う。なくても動く → [mise を使わない場合](#mise-を使わない場合)）
 
 ## 手順
 
@@ -54,25 +55,35 @@ Cloudflare のダッシュボードで、Pi の LAN IP を指す A レコード�
 
 ```bash
 cd deploy/caddy
-cp .env.example .env
+cp .mise.toml.example .mise.toml
 mkdir -p logs
 ```
 
-`.env` を自分のドメインに合わせて編集します。
+`.mise.toml` の `[env]` を自分のドメインに合わせて編集します。
 
-```bash
-BASE_DOMAIN=home.example.com
-ROTOM_HOST=rotom.home.example.com
-ACME_EMAIL=you@example.com
-CF_API_TOKEN=（手順 1 で発行したトークン）
+```toml
+[env]
+BASE_DOMAIN = "home.example.com"
+ROTOM_HOST = "rotom.home.example.com"
+ACME_EMAIL = "you@example.com"
+CF_API_TOKEN = "（手順 1 で発行したトークン）"
 ```
 
-`.env` は `.gitignore` 済みです。コミットしないでください。
+`docker-compose.yml` はこれらをシェルの環境変数として受け取ります。mise がこのディレクトリで有効になっていれば、そのまま `docker compose` に渡ります。
+
+初回は mise の信頼設定が必要です。
+
+```bash
+mise trust
+mise env   # 4 つの変数が export されていれば OK
+```
+
+**`.mise.toml` は API トークンを含むため `.gitignore` 済みです。コミットしないでください。**
 
 ### 4. 起動する
 
 ```bash
-docker compose up -d --build
+mise run up
 ```
 
 初回は Cloudflare DNS モジュール入りの Caddy をビルドするため、Raspberry Pi 上では数分かかります。
@@ -80,8 +91,18 @@ docker compose up -d --build
 証明書の取得状況はログで確認できます。
 
 ```bash
-docker compose logs -f caddy
+mise run logs
 ```
+
+用意してあるタスクは次のとおりです（`mise tasks` で一覧できます）。
+
+| タスク | 内容 |
+|---|---|
+| `mise run up` | 起動（初回はビルド） |
+| `mise run down` | 停止 |
+| `mise run logs` | ログを追う |
+| `mise run reload` | `Caddyfile` の変更を無停止で反映 |
+| `mise run cert` | 配信中の証明書の有効期限を確認 |
 
 `certificate obtained successfully` が出れば成功です。以降の更新（90 日ごと）は Caddy が自動で行うため、cron などの設定は不要です。
 
@@ -95,13 +116,32 @@ curl -v https://rotom.home.example.com/health
 
 ### 6. rpi-bridge を LAN から隠す
 
-Caddy が前段に立つので、rpi-bridge は localhost だけを待ち受ければ十分です。`rpi-bridge/.env` を次に戻します。
+Caddy が前段に立つので、rpi-bridge は localhost だけを待ち受ければ十分です。`rpi-bridge/.mise.toml`（または `.env`）の値を次に戻します。
 
-```bash
-BIND_HOST=127.0.0.1
+```toml
+BIND_HOST = "127.0.0.1"
 ```
 
 これで平文の `:3210` が LAN から見えなくなり、家庭内の通信もすべて TLS を通ります。Cloudflare Tunnel（`cloudflared`）も `http://localhost:3210` を見ているため、この変更の影響を受けません。
+
+## mise を使わない場合
+
+`docker-compose.yml` はシェルの環境変数を参照しているだけなので、mise は必須ではありません。同じ 4 つの変数を渡せれば何でも動きます。
+
+このディレクトリに `.env` を置く方法が最も簡単です（compose が自動で読み込みます）。
+
+```bash
+cat > .env <<'EOF'
+BASE_DOMAIN=home.example.com
+ROTOM_HOST=rotom.home.example.com
+ACME_EMAIL=you@example.com
+CF_API_TOKEN=（手順 1 で発行したトークン）
+EOF
+
+docker compose up -d --build
+```
+
+`.env` も `.gitignore` 済みです。なお **シェルの環境変数のほうが `.env` より優先される**ため、mise が有効なディレクトリで `.env` を併用すると mise の値が勝ちます。混乱を避けるため、どちらか一方に統一してください。
 
 ## トラブルシューティング
 
@@ -120,6 +160,20 @@ dig +short rotom.home.example.com
 ```
 
 前者だけ返るならリバインド保護です。ルーターの設定で当該ドメインを例外に加えるか、ローカル DNS 側で解決させてください。
+
+### 起動時に「未設定です」と言われる
+
+`docker-compose.yml` が環境変数を受け取れていません。
+
+```bash
+mise env | grep -E "BASE_DOMAIN|ROTOM_HOST|ACME_EMAIL|CF_API_TOKEN"
+```
+
+何も出ない場合は、次を確認します。
+
+- `mise trust` を実行したか（未実行だと mise は設定を読み込みません）
+- `deploy/caddy` ディレクトリで実行しているか（mise の `[env]` はディレクトリに紐づきます）
+- `.mise.toml` の変数が `[env]` セクションの下にあるか（トップレベルに書くと読み込まれません）
 
 ### 証明書の取得に失敗する
 
@@ -146,8 +200,8 @@ sudo ss -lntp | grep -E ':(80|443)'
 ### 証明書の状態を見る
 
 ```bash
+mise run cert   # 有効期限と subject
 docker compose exec caddy ls -R /data/caddy/certificates
-echo | openssl s_client -connect rotom.home.example.com:443 2>/dev/null | openssl x509 -noout -dates -subject
 ```
 
 ## 運用上の注意
@@ -155,3 +209,4 @@ echo | openssl s_client -connect rotom.home.example.com:443 2>/dev/null | openss
 - **`caddy_data` ボリュームは消さないでください。** 証明書と ACME アカウント鍵が入っています。消すと再取得になり、Let's Encrypt のレート制限（同一登録ドメイン 週 50 枚）に近づきます。
 - **HSTS の `max-age` は 1 時間に設定してあります。** 構成が安定してから伸ばしてください（一般的には `31536000`）。長い値を設定すると、その期間ブラウザ側で HTTP へ戻せなくなります。
 - **ホスト名を増やすとき**は、A レコードを足して `Caddyfile` に `handle` ブロックを追加するだけです。ワイルドカード証明書がすでにあるため、証明書の取得は発生しません。
+- **Pi の再起動時**はコンテナが自動で復帰します（`restart: unless-stopped`）。環境変数はコンテナ作成時に焼き込まれているため、mise が有効なシェルがなくても起動します。ただし `docker compose up` を再実行する際は、必ず `deploy/caddy` ディレクトリ（= mise が効く場所）から実行してください。cron や systemd から起動する場合は、`mise exec -- docker compose up -d` の形にするか、環境変数を明示的に渡す必要があります。

@@ -1,0 +1,48 @@
+# このファイルを .mise.toml にコピーして値を埋める。
+#   cp .mise.toml.example .mise.toml
+#
+# .mise.toml は API トークンを含むため Git 管理対象外（.gitignore 済み）。
+# docker compose は環境変数をシェルから受け取るので、mise がこのディレクトリで
+# 有効になっていれば `mise run up` でそのまま起動できる。
+
+[env]
+# ワイルドカード証明書を取得するベースドメイン（先頭に *. は付けない）
+# → *.home.example.com の証明書が発行される
+BASE_DOMAIN = "home.example.com"
+
+# Web UI を公開するホスト名（BASE_DOMAIN のサブドメインであること）
+ROTOM_HOST = "rotom.home.example.com"
+
+# Let's Encrypt に登録するメールアドレス（証明書の期限切れ通知先）
+ACME_EMAIL = "you@example.com"
+
+# Cloudflare API トークン
+#
+# 権限は「ゾーン → DNS → 編集」のみ、対象ゾーンも該当ドメインだけに絞ること。
+# Global API Key は絶対に使わない（アカウント全体を操作できてしまう）。
+# 発行手順は README.md を参照。
+CF_API_TOKEN = "your_cloudflare_api_token"
+
+# ---------------------------------------------------------------------------
+# 操作タスク（mise run <名前> で実行）
+# ---------------------------------------------------------------------------
+
+[tasks.up]
+description = "Caddy を起動する（初回はイメージのビルドが走る）"
+run = "docker compose up -d --build"
+
+[tasks.down]
+description = "Caddy を停止する"
+run = "docker compose down"
+
+[tasks.logs]
+description = "Caddy のログを追う（証明書の取得状況はここで確認する）"
+run = "docker compose logs -f caddy"
+
+[tasks.reload]
+description = "Caddyfile の変更を無停止で反映する"
+run = "docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile"
+
+[tasks.cert]
+description = "配信中の証明書の有効期限を確認する"
+run = "echo | openssl s_client -connect $ROTOM_HOST:443 2>/dev/null | openssl x509 -noout -dates -subject"
