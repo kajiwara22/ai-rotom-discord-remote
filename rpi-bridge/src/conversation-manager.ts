@@ -1,4 +1,4 @@
-import type { ChatMessage, ConversationSession, SessionInfo, UserInfo } from "./types.js";
+import type { ChatMessage, ConversationSession, SessionInfo, UserInfo, UserMode } from "./types.js";
 import { getSystemPrompt, DISCORD_RESTRICTIONS } from "./tool-definitions.js";
 import { getDb } from "./db.js";
 import crypto from "node:crypto";
@@ -166,42 +166,133 @@ function webSessionId(userId: string, sessionId: string): string {
   return `user:${userId}:session:${sessionId}`;
 }
 
-export function ensureUser(userId: string, displayName?: string): UserInfo {
+const DEFAULT_AVATAR = "pikachu-face";
+const DEFAULT_MODE: UserMode = "kids";
+
+function normalizeMode(value: unknown): UserMode {
+  return value === "junior" ? "junior" : "kids";
+}
+
+function rowToUser(row: Record<string, unknown>): UserInfo {
+  return {
+    user_id: row.user_id as string,
+    display_name: (row.display_name as string) ?? (row.user_id as string),
+    created_at: row.created_at as number,
+    avatar: (row.avatar as string) || DEFAULT_AVATAR,
+    mode: normalizeMode(row.mode),
+  };
+}
+
+export function ensureUser(
+  userId: string,
+  displayName?: string,
+  avatar?: string,
+  mode?: UserMode,
+): UserInfo {
   const db = getDb();
   const now = Date.now();
 
   const row = db.prepare(
-    "SELECT user_id, display_name, created_at FROM users WHERE user_id = ?",
+    "SELECT user_id, display_name, created_at, avatar, mode FROM users WHERE user_id = ?",
   ).get(userId) as Record<string, unknown> | undefined;
 
   if (row) {
-    return {
-      user_id: row.user_id as string,
-      display_name: (row.display_name as string) ?? userId,
-      created_at: row.created_at as number,
-    };
+    return rowToUser(row);
   }
 
+  const newAvatar = avatar || DEFAULT_AVATAR;
+  const newMode = mode ? normalizeMode(mode) : DEFAULT_MODE;
+
   db.prepare(
-    "INSERT INTO users (user_id, display_name, created_at) VALUES (?, ?, ?)",
-  ).run(userId, displayName ?? userId, now);
+    "INSERT INTO users (user_id, display_name, created_at, avatar, mode) VALUES (?, ?, ?, ?, ?)",
+  ).run(userId, displayName ?? userId, now, newAvatar, newMode);
 
-  console.log(`[conversation] ユーザー自動作成: ${userId}`);
+  console.log(`[conversation] ユーザー自動作成: ${userId} (avatar=${newAvatar}, mode=${newMode})`);
 
-  return { user_id: userId, display_name: displayName ?? userId, created_at: now };
+  return {
+    user_id: userId,
+    display_name: displayName ?? userId,
+    created_at: now,
+    avatar: newAvatar,
+    mode: newMode,
+  };
 }
 
 export function getUsers(): UserInfo[] {
   const db = getDb();
   const rows = db.prepare(
-    "SELECT user_id, display_name, created_at FROM users ORDER BY created_at ASC",
+    "SELECT user_id, display_name, created_at, avatar, mode FROM users ORDER BY created_at ASC",
   ).all() as Array<Record<string, unknown>>;
 
-  return rows.map((r) => ({
-    user_id: r.user_id as string,
-    display_name: (r.display_name as string) ?? (r.user_id as string),
-    created_at: r.created_at as number,
-  }));
+  return rows.map(rowToUser);
+}
+
+export function countUsers(): number {
+  const db = getDb();
+  const row = db.prepare("SELECT COUNT(*) AS n FROM users").get() as { n: number };
+  return row.n;
+}
+
+/**
+ * ユーザーと、そのユーザーに紐づく会話・メッセージ・個別プロンプトを削除する。
+ * messages は conversations への ON DELETE CASCADE で消えるが、
+ * 意図を明示するため明示的にも削除している。
+ */
+export function deleteUser(userId: string): boolean {
+  const db = getDb();
+  if (!getUser(userId)) return false;
+
+  const run = db.transaction(() => {
+    const sessions = db.prepare(
+      "SELECT session_id FROM conversations WHERE user_id = ?",
+    ).all(userId) as Array<{ session_id: string }>;
+
+    const delMessages = db.prepare("DELETE FROM messages WHERE session_id = ?");
+    for (const s of sessions) {
+      delMessages.run(s.session_id);
+    }
+
+    db.prepare("DELETE FROM conversations WHERE user_id = ?").run(userId);
+    db.prepare("DELETE FROM system_prompts WHERE user_id = ?").run(userId);
+    db.prepare("DELETE FROM users WHERE user_id = ?").run(userId);
+  });
+
+  run();
+  console.log(`[conversation] ユーザー削除: ${userId}`);
+  return true;
+}
+
+export function getUser(userId: string): UserInfo | null {
+  const db = getDb();
+  const row = db.prepare(
+    "SELECT user_id, display_name, created_at, avatar, mode FROM users WHERE user_id = ?",
+  ).get(userId) as Record<string, unknown> | undefined;
+
+  return row ? rowToUser(row) : null;
+}
+
+/** 表示名・アバター・モードの部分更新 */
+export function updateUser(
+  userId: string,
+  patch: { display_name?: string; avatar?: string; mode?: UserMode },
+): UserInfo | null {
+  const db = getDb();
+  const current = getUser(userId);
+  if (!current) return null;
+
+  const next = {
+    display_name: patch.display_name?.trim() || current.display_name,
+    avatar: patch.avatar?.trim() || current.avatar,
+    mode: patch.mode ? normalizeMode(patch.mode) : current.mode,
+  };
+
+  db.prepare(
+    "UPDATE users SET display_name = ?, avatar = ?, mode = ? WHERE user_id = ?",
+  ).run(next.display_name, next.avatar, next.mode, userId);
+
+  console.log(`[conversation] ユーザー更新: ${userId} (avatar=${next.avatar}, mode=${next.mode})`);
+
+  return { ...current, ...next };
 }
 
 export function getOrCreateWebSession(
@@ -296,19 +387,51 @@ export function resetWebSession(userId: string, sessionId: string): void {
   console.log(`[conversation] Webセッションリセット: ${sid}`);
 }
 
-export function getSystemPromptForUser(userId: string): string {
+/** モードごとの応答スタイル指示。UIの見た目だけでなく回答の難易度も合わせる */
+const MODE_INSTRUCTIONS: Record<UserMode, string> = {
+  kids: `
+
+## 相手について
+相手は小学校低学年の子どもです。次を必ず守ってください。
+- ひらがなを多めに使い、むずかしい漢字は避ける
+- 一文を短くする。専門用語は使う前にやさしく言いかえる
+- 数値を並べるより、まず「つよい / よわい」など感覚でわかる説明をする
+- 回答は 200 文字程度までにおさめる`,
+  junior: `
+
+## 相手について
+相手は小学校高学年以上です。次を意識してください。
+- 漢字を通常どおり使い、対戦用語もそのまま使ってよい
+- 種族値・SP 調整・与ダメージなど具体的な数値を示す
+- テーブルやリストを使って要点を整理する`,
+};
+
+/**
+ * 設定画面で編集する対象のプロンプト。
+ * モード指示は実行時に付与するため、ここには含めない。
+ * これを含めて返すと、保存のたびにモード指示が本文へ焼き込まれて増殖する。
+ */
+export function getStoredSystemPrompt(userId: string): string {
   const db = getDb();
   const row = db.prepare(
     "SELECT prompt_text FROM system_prompts WHERE user_id = ?",
   ).get(userId) as { prompt_text: string } | undefined;
 
-  if (row && row.prompt_text) {
-    return row.prompt_text;
-  }
+  return row && row.prompt_text ? row.prompt_text : getSystemPrompt();
+}
 
-  const base = getSystemPrompt();
+/** AI 呼び出しに実際に渡すプロンプト（保存内容 + モード指示） */
+export function getSystemPromptForUser(userId: string): string {
+  const base = getStoredSystemPrompt(userId);
+
   if (userId === "__discord__") {
     return base + DISCORD_RESTRICTIONS;
+  }
+
+  // ユーザーの表示モードに応じた応答スタイル指示を付与する
+  const user = getUser(userId);
+  if (user) {
+    return base + MODE_INSTRUCTIONS[user.mode];
   }
   return base;
 }
@@ -326,6 +449,78 @@ export function setSystemPromptForUser(userId: string, promptText: string): void
 
 export function updateSessionName(sessionId: string, name: string): void {
   renameWebSession(sessionId, name);
+}
+
+/**
+ * Webセッションを完全に削除する。
+ * user_id を必ず条件に含め、他ユーザーのセッションを消せないようにする。
+ * @returns 削除できた場合 true
+ */
+export function deleteWebSession(userId: string, sessionId: string): boolean {
+  const db = getDb();
+  const sid = webSessionId(userId, sessionId);
+
+  const owned = db.prepare(
+    "SELECT 1 FROM conversations WHERE session_id = ? AND user_id = ?",
+  ).get(sid, userId);
+
+  if (!owned) {
+    return false;
+  }
+
+  db.prepare("DELETE FROM messages WHERE session_id = ?").run(sid);
+  db.prepare("DELETE FROM conversations WHERE session_id = ?").run(sid);
+  console.log(`[conversation] Webセッション削除: ${sid}`);
+  return true;
+}
+
+// ========== 保護者用 PIN ==========
+
+const PIN_KEY = "parent_pin";
+
+function getSetting(key: string): string | null {
+  const db = getDb();
+  const row = db.prepare("SELECT value FROM app_settings WHERE key = ?").get(key) as
+    | { value: string }
+    | undefined;
+  return row ? row.value : null;
+}
+
+function setSetting(key: string, value: string): void {
+  const db = getDb();
+  const now = Date.now();
+  db.prepare(
+    "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = ?",
+  ).run(key, value, now, value, now);
+}
+
+/** PIN は salt 付き scrypt で保存する（平文では持たない） */
+function hashPin(pin: string, salt: string): string {
+  return crypto.scryptSync(pin, salt, 32).toString("hex");
+}
+
+export function isParentPinSet(): boolean {
+  return getSetting(PIN_KEY) !== null;
+}
+
+export function setParentPin(pin: string): void {
+  const salt = crypto.randomBytes(16).toString("hex");
+  setSetting(PIN_KEY, `${salt}:${hashPin(pin, salt)}`);
+  console.log("[conversation] 保護者PINを更新しました");
+}
+
+export function verifyParentPin(pin: string): boolean {
+  const stored = getSetting(PIN_KEY);
+  if (!stored) return false;
+
+  const [salt, expected] = stored.split(":");
+  if (!salt || !expected) return false;
+
+  const actual = hashPin(pin, salt);
+  // タイミング攻撃対策のため定数時間比較を使う
+  const a = Buffer.from(actual, "hex");
+  const b = Buffer.from(expected, "hex");
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 export function getSessionMessages(sessionId: string): ChatMessage[] {

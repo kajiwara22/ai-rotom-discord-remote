@@ -130,10 +130,16 @@ export interface SessionInfo {
   message_count: number;
 }
 
+/** 表示モード: kids = 低学年向け（ひらがな中心）, junior = 高学年〜大人向け */
+export type UserMode = "kids" | "junior";
+
 export interface UserInfo {
   user_id: string;
   display_name: string;
   created_at: number;
+  /** public/img/avatars/<avatar>.png のファイル名部分 */
+  avatar: string;
+  mode: UserMode;
 }
 
 export interface SystemPromptInfo {

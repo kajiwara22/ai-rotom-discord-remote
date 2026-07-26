@@ -3,6 +3,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFileSync, existsSync } from "node:fs";
 import { join, extname } from "node:path";
+import { randomUUID } from "node:crypto";
 import type { AskRequest, AskResponse, WebAskRequest, WebResetRequest } from "./types.js";
 import { runAsk, runAskForWeb } from "./ai-service.js";
 import {
@@ -10,13 +11,20 @@ import {
   resetSession,
   ensureUser,
   getUsers,
+  updateUser,
+  deleteUser,
+  countUsers,
   getUserSessions,
   renameWebSession,
   resetWebSession,
-  getSystemPromptForUser,
+  deleteWebSession,
+  getStoredSystemPrompt,
   setSystemPromptForUser,
   getSessionMessages,
   resolveWebSessionId,
+  isParentPinSet,
+  setParentPin,
+  verifyParentPin,
 } from "./conversation-manager.js";
 import { closeDb } from "./db.js";
 
@@ -26,6 +34,43 @@ const BIND_HOST = process.env.BIND_HOST ?? HOST;
 const OPENCODE_GO_API_KEY = process.env.OPENCODE_GO_API_KEY ?? "";
 const OPENCODE_GO_BASE_URL = process.env.OPENCODE_GO_BASE_URL ?? "https://opencode.ai/zen/go/v1";
 const BRIDGE_URL = process.env.BRIDGE_URL ?? `http://127.0.0.1:${PORT}`;
+/** PIN 未設定時に使う初期 PIN。初回起動後に設定画面から変更できる */
+const DEFAULT_PARENT_PIN = process.env.PARENT_PIN ?? "1234";
+
+// ========== 保護者セッション（メモリ保持） ==========
+const PARENT_TOKEN_TTL_MS = 30 * 60 * 1000;
+const parentTokens = new Map<string, number>();
+
+function issueParentToken(): string {
+  const token = randomUUID();
+  parentTokens.set(token, Date.now() + PARENT_TOKEN_TTL_MS);
+  return token;
+}
+
+function isValidParentToken(token: string | undefined): boolean {
+  if (!token) return false;
+  const expiresAt = parentTokens.get(token);
+  if (!expiresAt) return false;
+  if (expiresAt < Date.now()) {
+    parentTokens.delete(token);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * 保護者専用エンドポイントのガード。
+ * 認証されていなければ 401 を返して true を返す（呼び出し側は即 return する）。
+ */
+function rejectIfNotParent(req: IncomingMessage, res: ServerResponse): boolean {
+  const token = req.headers["x-parent-token"];
+  if (isValidParentToken(Array.isArray(token) ? token[0] : token)) {
+    return false;
+  }
+  res.writeHead(401, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ error: "保護者認証が必要です" }));
+  return true;
+}
 
 async function main(): Promise<void> {
   console.log("ai-rotom MCP Bridge 起動中...");
@@ -126,12 +171,122 @@ async function main(): Promise<void> {
     if (method === "POST" && url === "/api/users") {
       try {
         const body = await readBody(req);
-        const { user_id, display_name } = JSON.parse(body);
-        const user = ensureUser(user_id, display_name);
+        const { user_id, display_name, avatar, mode } = JSON.parse(body);
+        const user = ensureUser(user_id, display_name, avatar, mode);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(user));
       } catch (error) {
         res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: String(error) }));
+      }
+      return;
+    }
+
+    // 保護者用: PIN の設定状況
+    if (method === "GET" && url === "/api/parent/status") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ pin_set: isParentPinSet() }));
+      return;
+    }
+
+    // 保護者用: PIN 認証 → トークン発行
+    if (method === "POST" && url === "/api/parent/verify") {
+      try {
+        const body = await readBody(req);
+        const { pin } = JSON.parse(body) as { pin?: string };
+
+        // 未設定なら初回起動時の既定 PIN を登録しておく
+        if (!isParentPinSet()) {
+          setParentPin(DEFAULT_PARENT_PIN);
+        }
+
+        if (!pin || !verifyParentPin(pin)) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "暗証番号が違います" }));
+          return;
+        }
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ token: issueParentToken(), expires_in: PARENT_TOKEN_TTL_MS }));
+      } catch (error) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: String(error) }));
+      }
+      return;
+    }
+
+    // 保護者用: PIN 変更（認証済みのみ）
+    if (method === "PUT" && url === "/api/parent/pin") {
+      if (rejectIfNotParent(req, res)) return;
+      try {
+        const body = await readBody(req);
+        const { pin } = JSON.parse(body) as { pin?: string };
+        if (!pin || !/^\d{4}$/.test(pin)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "暗証番号は数字4桁で指定してください" }));
+          return;
+        }
+        setParentPin(pin);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true }));
+      } catch (error) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: String(error) }));
+      }
+      return;
+    }
+
+    // ユーザー情報更新
+    // アバターだけの変更は見た目のみなので子ども自身が行える（PIN不要）。
+    // 表示名・モードは保護者による設定なので認証を必須にする。
+    const userPatchMatch = url.match(/^\/api\/users\/([^/?]+)$/);
+    if (method === "PATCH" && userPatchMatch) {
+      try {
+        const userId = decodeURIComponent(userPatchMatch[1]);
+        const body = await readBody(req);
+        const { display_name, avatar, mode } = JSON.parse(body);
+
+        const needsParent = display_name !== undefined || mode !== undefined;
+        if (needsParent && rejectIfNotParent(req, res)) return;
+
+        const user = updateUser(userId, { display_name, avatar, mode });
+        if (!user) {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "ユーザーが見つかりません" }));
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(user));
+      } catch (error) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: String(error) }));
+      }
+      return;
+    }
+
+    // 保護者用: ユーザー削除（会話履歴もまとめて消える）
+    if (method === "DELETE" && userPatchMatch) {
+      if (rejectIfNotParent(req, res)) return;
+      try {
+        const userId = decodeURIComponent(userPatchMatch[1]);
+
+        // 全員消してしまうと誰も使えなくなるため最後の1人は残す
+        if (countUsers() <= 1) {
+          res.writeHead(409, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "最後のユーザーは削除できません" }));
+          return;
+        }
+
+        if (!deleteUser(userId)) {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "ユーザーが見つかりません" }));
+          return;
+        }
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true }));
+      } catch (error) {
+        res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: String(error) }));
       }
       return;
@@ -142,7 +297,8 @@ async function main(): Promise<void> {
     if (method === "GET" && promptGetMatch) {
       try {
         const userId = promptGetMatch[1];
-        const promptText = getSystemPromptForUser(userId);
+        // 編集用なのでモード指示を含まない保存内容を返す
+        const promptText = getStoredSystemPrompt(userId);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ user_id: userId, prompt_text: promptText }));
       } catch (error) {
@@ -152,9 +308,10 @@ async function main(): Promise<void> {
       return;
     }
 
-    // Web用: プロンプト更新
+    // Web用: プロンプト更新（保護者認証が必要）
     const promptPutMatch = url.match(/^\/api\/users\/(.+)\/prompt$/);
     if (method === "PUT" && promptPutMatch) {
+      if (rejectIfNotParent(req, res)) return;
       try {
         const userId = promptPutMatch[1];
         const body = await readBody(req);
@@ -187,8 +344,8 @@ async function main(): Promise<void> {
       return;
     }
 
-    // Web用: セッション名変更 / メッセージ取得
-    const sessionDetailMatch = url.match(/^\/api\/sessions\/([^/?]+)$/);
+    // Web用: セッション名変更 / メッセージ取得 / 削除
+    const sessionDetailMatch = url.match(/^\/api\/sessions\/([^/?]+)/);
     if (sessionDetailMatch) {
       const sessionId = sessionDetailMatch[1];
       if (method === "PUT") {
@@ -197,6 +354,10 @@ async function main(): Promise<void> {
       }
       if (method === "GET") {
         await handleSessionMessages(sessionId, res);
+        return;
+      }
+      if (method === "DELETE") {
+        await handleSessionDelete(sessionId, url, res);
         return;
       }
     }
@@ -214,15 +375,21 @@ async function main(): Promise<void> {
     console.log(`  POST /tools/:name          - ツール実行`);
     console.log(`  POST /ask                  - Discord用AI質問受付`);
     console.log(`  POST /reset                - Discord用会話リセット`);
-    console.log(`  GET  /api/users            - Webユーザー一覧`);
-    console.log(`  POST /api/users            - Webユーザー作成`);
-    console.log(`  GET  /api/users/:id/prompt - プロンプト取得`);
-    console.log(`  PUT  /api/users/:id/prompt - プロンプト更新`);
-    console.log(`  POST /api/web/ask          - Web用AI質問`);
-    console.log(`  POST /api/web/reset        - Web用会話リセット`);
-    console.log(`  GET  /api/sessions?...     - セッション一覧`);
-    console.log(`  PUT  /api/sessions/:id     - セッション名変更`);
-    console.log(`  GET  /api/sessions/:id     - メッセージ履歴`);
+    console.log(`  GET    /api/users            - Webユーザー一覧`);
+    console.log(`  POST   /api/users            - Webユーザー作成`);
+    console.log(`  PATCH  /api/users/:id        - ユーザー更新（名前/モードは保護者認証）`);
+    console.log(`  DELETE /api/users/:id        - ユーザー削除（保護者認証）`);
+    console.log(`  GET    /api/users/:id/prompt - プロンプト取得`);
+    console.log(`  PUT    /api/users/:id/prompt - プロンプト更新（保護者認証）`);
+    console.log(`  GET    /api/parent/status    - PIN 設定状況`);
+    console.log(`  POST   /api/parent/verify    - PIN 認証`);
+    console.log(`  PUT    /api/parent/pin       - PIN 変更（保護者認証）`);
+    console.log(`  POST   /api/web/ask          - Web用AI質問`);
+    console.log(`  POST   /api/web/reset        - Web用会話リセット`);
+    console.log(`  GET    /api/sessions?...     - セッション一覧`);
+    console.log(`  PUT    /api/sessions/:id     - セッション名変更`);
+    console.log(`  GET    /api/sessions/:id     - メッセージ履歴`);
+    console.log(`  DELETE /api/sessions/:id     - セッション削除`);
   });
 
   const shutdown = async () => {
@@ -240,8 +407,8 @@ async function main(): Promise<void> {
 
 function setCors(res: ServerResponse): void {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Parent-Token");
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -259,6 +426,9 @@ const MIME_TYPES: Record<string, string> = {
   ".js": "application/javascript; charset=utf-8",
   ".json": "application/json",
   ".png": "image/png",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
   ".svg": "image/svg+xml",
 };
 
@@ -453,6 +623,38 @@ async function handleSessionList(url: string, res: ServerResponse): Promise<void
     const sessions = getUserSessions(userId);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(sessions));
+  } catch (error) {
+    res.writeHead(500, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: String(error) }));
+  }
+}
+
+/** セッション削除: DELETE /api/sessions/:id?user_id=xxx */
+async function handleSessionDelete(
+  rawId: string,
+  url: string,
+  res: ServerResponse,
+): Promise<void> {
+  try {
+    const queryIndex = url.indexOf("?");
+    const params = new URLSearchParams(queryIndex >= 0 ? url.slice(queryIndex) : "");
+    const userId = params.get("user_id");
+
+    if (!userId) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "user_id クエリパラメータが必要です" }));
+      return;
+    }
+
+    const deleted = deleteWebSession(userId, rawId);
+    if (!deleted) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "セッションが見つかりません" }));
+      return;
+    }
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ success: true }));
   } catch (error) {
     res.writeHead(500, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: String(error) }));

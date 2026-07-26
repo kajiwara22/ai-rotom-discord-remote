@@ -65,7 +65,16 @@ export function getDb(): Database.Database {
       prompt_text TEXT NOT NULL DEFAULT '',
       updated_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
   `);
+
+  // マイグレーション: users に avatar, mode カラム追加
+  migrateUsersTable();
 
   console.log(`[db] SQLite 初期化完了: ${dbPath}`);
   return db;
@@ -88,6 +97,24 @@ function migrateConversationsTable(): void {
 
   // Web用インデックス（なければ作成）
   d.exec("CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id)");
+}
+
+function migrateUsersTable(): void {
+  const d = db!;
+
+  const existing = d.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>;
+  const columnNames = new Set(existing.map((c) => c.name));
+
+  // アバター画像のキー（public/img/avatars/<avatar>.png）
+  if (!columnNames.has("avatar")) {
+    d.exec("ALTER TABLE users ADD COLUMN avatar TEXT NOT NULL DEFAULT 'pikachu-face'");
+    console.log("[db] マイグレーション: users.avatar カラム追加");
+  }
+  // 表示モード: kids（低学年向け・ひらがな中心） / junior（高学年〜大人向け）
+  if (!columnNames.has("mode")) {
+    d.exec("ALTER TABLE users ADD COLUMN mode TEXT NOT NULL DEFAULT 'kids'");
+    console.log("[db] マイグレーション: users.mode カラム追加");
+  }
 }
 
 export function closeDb(): void {
