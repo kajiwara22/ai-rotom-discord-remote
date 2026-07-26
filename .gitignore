@@ -4,6 +4,10 @@ dist/
 .wrangler/
 *.log
 
+# Caddy（TLS 終端）の設定と Cloudflare API トークン
+deploy/caddy/.env
+deploy/caddy/logs/
+
 # ---------------------------------------------------------------------------
 # ポケモンイラストラボ素材（再配布不可）
 #

@@ -19,7 +19,8 @@ Cloudflare Worker (軽量プロキシ)                │
     ├── deferredResponse() を返す (3秒以内)      │
     └── 非同期で Raspberry Pi に POST /ask       │
             ↓ (Cloudflare Tunnel + Access 認証) │
-            ↓                                  │
+            ↓                          Caddy (:443, TLS 終端)
+            ↓                                  ↓
 Raspberry Pi (Node.js HTTP サーバー) ←──────────┘
     ├── Web UI 配信 (public/)
     ├── AI 処理実行 (OpenCode Go API)
@@ -32,6 +33,7 @@ Raspberry Pi (Node.js HTTP サーバー) ←──────────┘
 - **Cloudflare Worker**: Discord 受信 → 署名検証 → 即座に deferred response → Pi へ転送するだけの薄いプロキシ
 - **Raspberry Pi**: AI 推論・ツール実行・セッション管理・Webhook 応答・Web UI 配信のすべてを担当
 - **Cloudflare Tunnel + Access**: Worker ↔ Pi 間のセキュアな接続
+- **Caddy**: 家庭内 LAN からの Web UI アクセスの TLS 終端（→ [Web UI の HTTPS 化](#5-web-ui-の-https-化推奨)）
 
 Web UI は Pi が直接配信するため、Discord / Worker を経由しません。
 
@@ -49,7 +51,16 @@ Web UI は Pi が直接配信するため、Discord / Worker を経由しませ�
 
 ## Web UI「AIバトルコーチ」
 
-`http://<Pi のアドレス>:3210/` でアクセスします。ビルド不要の静的ファイル（HTML/CSS/JS）で、Pi が `public/` を直接配信します。
+ビルド不要の静的ファイル（HTML/CSS/JS）で、Pi が `public/` を直接配信します。
+
+アクセス先は構成によって変わります。
+
+| 構成 | URL |
+|---|---|
+| HTTPS 化あり（推奨） | `https://rotom.<家庭用ドメイン>/` |
+| 素の状態 | `http://<Pi のアドレス>:3210/` |
+
+保護者 PIN が平文で LAN 上を流れるため、[Web UI の HTTPS 化](#5-web-ui-の-https-化推奨)を推奨します。
 
 ### 表示モード
 
@@ -172,7 +183,6 @@ wrangler tail
 cd rpi-bridge
 cp .env.example .env
 # .env を編集（特に OPENCODE_GO_API_KEY を設定）
-# BIND_HOST=0.0.0.0 で外部からの接続を許可
 
 pnpm install
 pnpm dev          # 通常起動
@@ -180,7 +190,13 @@ pnpm dev:inspect  # VS Code リモートデバッグ用 (port 9229)
 ```
 
 デフォルトで `http://127.0.0.1:3210` で起動します。
-**家庭内の他の端末（タブレットなど）から Web UI を開く場合は `BIND_HOST=0.0.0.0` を設定してください。**
+
+家庭内の他の端末（タブレットなど）から Web UI を開く場合、`BIND_HOST` の扱いは構成によって変わります。
+
+| 構成 | `BIND_HOST` |
+|---|---|
+| [HTTPS 化あり](#5-web-ui-の-https-化推奨)（推奨） | `127.0.0.1` のまま。Caddy が前段で受けるため LAN へ晒す必要がない |
+| 素の状態 | `0.0.0.0`。平文の `:3210` が LAN から直接見える |
 
 DB スキーマは起動時に自動マイグレーションされるため、既存の DB をそのまま使えます。
 
@@ -232,7 +248,30 @@ npx wrangler secret put PI_BRIDGE_URL
 
 > **注意**: Tunnel でこのホストを公開すると Web UI もインターネットから到達可能になります。Web UI 自体にログイン機能はないため、公開する場合は Cloudflare Access などで必ず前段に認証を置いてください。
 
-### 5. 環境変数の設定
+### 5. Web UI の HTTPS 化（推奨）
+
+家庭内 LAN から `https://rotom.<家庭用ドメイン>/` でアクセスできるようにします。ドメインを Cloudflare で管理していることが前提です。
+
+- 証明書は Let's Encrypt を **DNS-01 チャレンジ**で取得するため、**Pi をインターネットへ公開する必要はありません**（80/443 の穴あけ不要）
+- Pi 上の Caddy が TLS を終端し、`127.0.0.1:3210` の rpi-bridge へリバースプロキシします
+- 証明書の取得と 90 日ごとの更新は Caddy が自動で行うため、cron の設定は不要です
+
+```bash
+cd deploy/caddy
+cp .env.example .env
+mkdir -p logs
+# .env にドメインと Cloudflare API トークンを設定
+
+docker compose up -d --build
+```
+
+**手順の詳細（API トークンの発行、DNS レコードの作成、トラブルシューティング）は [deploy/caddy/README.md](deploy/caddy/README.md) を参照してください。** 設計上の判断は [ADR-0002](docs/adr/ADR-0002.md) に記録しています。
+
+HTTPS 化すると、保護者 PIN やトークンが LAN 上を平文で流れなくなり、Pi の IP 変更が家族に影響しなくなります。
+
+> **注意**: これは通信路の保護であり、認証の追加ではありません。Web UI にログイン機能がない点は変わらないため、**インターネットへの公開は引き続き想定していません**。
+
+### 6. 環境変数の設定
 
 #### Worker (Cloudflare)
 
@@ -255,7 +294,7 @@ npx wrangler secret put ALLOWED_CHANNEL_IDS
 | 変数 | 説明 | デフォルト |
 |---|---|---|
 | `PORT` | サーバーポート | `3210` |
-| `BIND_HOST` | バインドアドレス | `127.0.0.1` |
+| `BIND_HOST` | バインドアドレス（Caddy 経由なら `127.0.0.1` のまま） | `127.0.0.1` |
 | `DATABASE_PATH` | SQLite ファイルパス | `/tmp/rotom-conversations.db` |
 | `OPENCODE_GO_API_KEY` | OpenCode Go API キー | **(必須)** |
 | `OPENCODE_GO_BASE_URL` | API ベース URL | `https://opencode.ai/zen/go/v1` |
@@ -263,7 +302,7 @@ npx wrangler secret put ALLOWED_CHANNEL_IDS
 | `PARENT_PIN` | Web UI 保護者設定の初期 PIN（数字4桁） | `1234` |
 | `WEB_SESSION_TTL_DAYS` | Web チャット履歴の保持日数（Discord は 30分固定） | `30` |
 
-### 6. 動作確認
+### 7. 動作確認
 
 #### Discord
 
@@ -274,7 +313,7 @@ npx wrangler secret put ALLOWED_CHANNEL_IDS
 
 #### Web UI
 
-ブラウザで `http://<Pi のアドレス>:3210/` を開きます。初回起動時はユーザーが存在しないため「ゲスト」が自動作成されます。歯車 → PIN（既定 `1234`）から家族のユーザーを追加し、それぞれのモードとアイコンを設定してください。
+ブラウザで `https://rotom.<家庭用ドメイン>/`（HTTPS 化していない場合は `http://<Pi のアドレス>:3210/`）を開きます。初回起動時はユーザーが存在しないため「ゲスト」が自動作成されます。歯車 → PIN（既定 `1234`）から家族のユーザーを追加し、それぞれのモードとアイコンを設定してください。
 
 #### Pi の単体テスト
 
@@ -393,18 +432,27 @@ ai-rotom-discord-remote/
 │   │       └── pokemon_illust_lab_202403/  # ZIP の展開物（任意）
 │   ├── .env.example
 │   └── package.json
+├── deploy/
+│   └── caddy/                     # Web UI の TLS 終端（Let's Encrypt / DNS-01）
+│       ├── Dockerfile             # Cloudflare DNS モジュール入り Caddy のビルド
+│       ├── docker-compose.yml
+│       ├── Caddyfile
+│       ├── .env.example
+│       └── README.md              # 手順書・トラブルシューティング
 ├── scripts/
 │   ├── setup-pokemon-assets.sh    # イラストラボ素材の展開・リサイズ
 │   └── start-opencode-web.sh
 └── docs/
     └── adr/                       # Architecture Decision Records
-        └── ADR-0001.md            # 家庭用 Web チャットアプリの設計判断
+        ├── ADR-0001.md            # 家庭用 Web チャットアプリの設計判断
+        └── ADR-0002.md            # Web UI の TLS 終端と証明書取得方式
 ```
 
 ## セキュリティ上の注意
 
 - **Web UI にログイン機能はありません。** ユーザー選択は「誰として使うか」を選ぶだけで、認証ではありません。家庭内 LAN での利用を前提としています
 - 保護者設定の PIN はサーバー側で検証されますが、これは**子どもの誤操作を防ぐためのもの**であり、本格的なアクセス制御ではありません
+- PIN と保護者トークンを LAN 上に平文で流さないため、[Web UI の HTTPS 化](#5-web-ui-の-https-化推奨)を推奨します（家庭内の Wi-Fi にはゲストや子どもの端末も接続します）
 - インターネットに公開する場合は、Cloudflare Access など前段の認証を必ず併用してください
 - AI の応答は Markdown として描画されますが、変換前に `<` `>` をエスケープしているため、応答やツール結果に含まれる生 HTML は実行されません
 
@@ -429,4 +477,6 @@ docs/ui-mock/                               # UI 検討用モック（実装に�
 ## 関連ドキュメント
 
 - [ADR-0001](docs/adr/ADR-0001.md) — 家庭用 Web チャットアプリケーションの設計判断
+- [ADR-0002](docs/adr/ADR-0002.md) — Web UI の TLS 終端と証明書取得方式
+- [deploy/caddy/README.md](deploy/caddy/README.md) — HTTPS 化の手順書
 - [AGENTS.md](AGENTS.md) — 開発時の注意点・コマンド・既知の重複コード

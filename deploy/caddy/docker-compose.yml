@@ -1,0 +1,27 @@
+services:
+  caddy:
+    build: .
+    image: ai-rotom-caddy:latest
+    container_name: ai-rotom-caddy
+    restart: unless-stopped
+
+    # ホストネットワークを使う。
+    # - 80/443 をそのまま待ち受けられる
+    # - reverse_proxy 先の 127.0.0.1:3210（rpi-bridge）にコンテナから直接届く
+    #   ため、rpi-bridge を LAN に晒す（BIND_HOST=0.0.0.0）必要がなくなる
+    network_mode: host
+
+    env_file: .env
+
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # 取得済み証明書と ACME アカウント鍵。
+      # ここを消すと証明書を取り直すことになり、Let's Encrypt の
+      # レート制限（同一ドメイン 週 50 枚）に当たる恐れがある。必ず永続化する。
+      - caddy_data:/data
+      - caddy_config:/config
+      - ./logs:/var/log/caddy
+
+volumes:
+  caddy_data:
+  caddy_config:

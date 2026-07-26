@@ -1,0 +1,65 @@
+# ---------------------------------------------------------------------------
+# 家庭内 LAN 向け HTTPS 終端
+#
+# Let's Encrypt の DNS-01 チャレンジで証明書を取得するため、Pi をインターネット
+# へ公開する必要がない（80/443 の穴あけ不要）。
+# 詳細な手順は同ディレクトリの README.md、決定の経緯は
+# docs/adr/ADR-0002.md を参照。
+# ---------------------------------------------------------------------------
+
+{
+	# 証明書の期限切れ・失効の通知先
+	email {$ACME_EMAIL}
+
+	# 設定を試している間は、下行のコメントを外してステージング環境を使う。
+	# 本番の Let's Encrypt は失敗回数にも制限があり、繰り返し失敗すると
+	# 1 時間ほど締め出される。ステージングの証明書はブラウザに信頼されない
+	# ので「鍵マークは出ないが取得は成功する」状態になれば設定は正しい。
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+# ワイルドカードで 1 枚取っておくと、今後 Pi で家庭内サービスを増やしても
+# 証明書を取り直さずにホスト名を足せる。
+*.{$BASE_DOMAIN} {
+	tls {
+		dns cloudflare {env.CF_API_TOKEN}
+
+		# DNS-01 のレコード伝搬確認に使うリゾルバ。
+		# ローカル DNS が split-horizon 構成だと確認に失敗することがあるため、
+		# パブリックリゾルバを明示する。
+		resolvers 1.1.1.1 1.0.0.1
+	}
+
+	encode zstd gzip
+
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+		format json
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy same-origin
+
+		# Caddy v2 は HSTS を自動では付けない（v1 との違い）。
+		# 一度ブラウザに焼き付くと max-age の期間は HTTP に戻せないため、
+		# 運用が固まるまでは 1 時間程度に留めておく。
+		Strict-Transport-Security "max-age=3600"
+	}
+
+	@rotom host {$ROTOM_HOST}
+	handle @rotom {
+		# rpi-bridge。AI 応答は数十秒かかることがあるが、
+		# Caddy の reverse_proxy はデフォルトでタイムアウトを設けない。
+		reverse_proxy 127.0.0.1:3210
+	}
+
+	# ワイルドカード証明書なので、DNS さえ引ければ任意のホスト名で到達しうる。
+	# 定義していないホスト名は接続を切る。
+	handle {
+		abort
+	}
+}
