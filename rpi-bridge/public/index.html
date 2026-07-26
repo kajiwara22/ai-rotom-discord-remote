@@ -2,147 +2,213 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ai-rotoM</title>
-<link rel="stylesheet" href="/public/mvp.css">
-<style>
-html, body { height: 100%; margin: 0; padding: 0; overflow: hidden; }
-#app { display: flex; flex-direction: column; height: 100vh; }
-header {
-  display: flex; align-items: center; gap: 0.75rem;
-  padding: 0.5rem 1rem;
-  border-bottom: 1px solid var(--color-bg-secondary);
-  background: var(--color-bg);
-  flex-shrink: 0;
-}
-header select { margin: 0; max-width: 200px; }
-header label { margin: 0; display: flex; align-items: center; gap: 0.5rem; }
-header h1 { font-size: 1.2rem; margin: 0; white-space: nowrap; }
-
-#main { display: flex; flex: 1; overflow: hidden; }
-#sidebar {
-  width: 260px; flex-shrink: 0;
-  border-right: 1px solid var(--color-bg-secondary);
-  display: flex; flex-direction: column;
-  overflow: hidden;
-}
-#sidebar > button {
-  margin: 0.5rem;
-  flex-shrink: 0;
-}
-#session-list {
-  flex: 1; overflow-y: auto;
-  padding: 0.25rem 0.5rem;
-}
-.session-item {
-  padding: 0.5rem 0.75rem;
-  cursor: pointer;
-  border-radius: 6px;
-  margin-bottom: 2px;
-  word-break: break-all;
-}
-.session-item:hover { background: var(--color-bg-secondary); }
-.session-item.active { background: var(--color-bg-secondary); font-weight: 600; }
-.session-name { font-size: 0.875rem; line-height: 1.3; }
-.session-time { font-size: 0.75rem; color: var(--color-secondary); }
-.no-sessions { padding: 1rem; text-align: center; color: var(--color-secondary); font-size: 0.875rem; }
-
-#chat-area {
-  flex: 1; display: flex; flex-direction: column;
-  min-width: 0;
-}
-#messages {
-  flex: 1; overflow-y: auto;
-  padding: 1rem;
-}
-#loading {
-  display: none;
-  justify-content: center; align-items: center;
-  padding: 1rem; color: var(--color-secondary);
-}
-#loading.active { display: flex; }
-.spinner {
-  width: 24px; height: 24px;
-  border: 3px solid var(--color-bg-secondary);
-  border-top-color: var(--color-primary);
-  border-radius: 50%;
-  animation: spin 0.6s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-
-#input-area {
-  border-top: 1px solid var(--color-bg-secondary);
-  padding: 0.75rem;
-  display: flex; gap: 0.5rem;
-  flex-shrink: 0;
-}
-#input-area input {
-  flex: 1; margin: 0;
-}
-#input-area button { margin: 0; flex-shrink: 0; }
-
-#no-chat {
-  flex: 1; display: flex;
-  justify-content: center; align-items: center;
-  color: var(--color-secondary);
-}
-
-#prompt-dialog textarea {
-  width: 100%; min-height: 200px; font-size: 0.875rem;
-  font-family: monospace;
-}
-
-.msg { margin-bottom: 0.75rem; }
-.msg-user { }
-.msg-assistant { }
-.msg-label {
-  font-size: 0.75rem; color: var(--color-secondary);
-  margin-bottom: 0.15rem;
-}
-
-@media (max-width: 600px) {
-  #sidebar { width: 200px; }
-}
-</style>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>ロトム図鑑</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%23F2542D'/%3E%3Ccircle cx='16' cy='16' r='9' fill='%2335C9E8'/%3E%3Ccircle cx='13' cy='13' r='3' fill='%23fff'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/public/style.css">
 </head>
 <body>
-<div id="app">
-  <header>
-    <h1>ai-rotoM</h1>
-    <label>
-      ユーザー:
-      <select id="user-select"></select>
-    </label>
-    <button id="settings-btn" type="button" style="margin-left:auto">設定</button>
-  </header>
-  <main id="main">
-    <nav id="sidebar">
-      <button id="new-chat-btn" type="button">＋ 新規チャット</button>
-      <div id="session-list"></div>
-    </nav>
-    <div id="chat-area">
-      <div id="no-chat">左の「新規チャット」またはセッションを選択してください</div>
-      <div id="messages"></div>
-      <div id="loading"><span class="spinner"></span>&nbsp;考え中...</div>
-      <form id="input-area" autocomplete="off">
-        <input id="message-input" type="text" placeholder="メッセージを入力..." disabled>
-        <button id="send-btn" type="submit" disabled>送信</button>
-      </form>
+
+<div id="pokedex">
+ <div id="screen">
+
+  <header class="appbar">
+    <button class="iconbtn" id="menu-btn" type="button" aria-label="メニュー">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+        <path d="M3 6h18M3 12h18M3 18h18"/></svg>
+    </button>
+
+    <div class="brand">
+      <span class="lens" aria-hidden="true"></span>
+      <div>
+        <h1 data-l="appName"></h1>
+        <div class="sub" data-l="tagline"></div>
+      </div>
     </div>
-  </main>
+
+    <div class="spacer"></div>
+
+    <button class="userchip" id="user-chip" type="button">
+      <img id="user-chip-img" src="/public/img/avatars/pikachu-face.png" alt="">
+      <span class="name" id="user-chip-name"></span>
+    </button>
+
+    <button class="iconbtn" id="settings-btn" type="button" aria-label="設定">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="3.2"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6h.08A1.65 1.65 0 0 0 10 3.09V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v.08a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+    </button>
+  </header>
+
+  <div class="body">
+    <div class="scrim" id="scrim"></div>
+
+    <nav class="sidebar" id="sidebar">
+      <button class="newchat" id="new-chat-btn" type="button">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round">
+          <path d="M12 5v14M5 12h14"/></svg>
+        <span data-l="newChat"></span>
+      </button>
+      <h2 data-l="history"></h2>
+      <div class="session-list" id="session-list"></div>
+    </nav>
+
+    <main class="chat">
+      <div class="messages" id="messages"><div class="messages-inner" id="messages-inner"></div></div>
+
+      <div class="thinking-bar">
+        <div class="messages-inner">
+          <div class="thinking" id="thinking">
+            <img id="thinking-img" src="/public/img/avatars/pikachu-dance.png" alt="">
+            <div>
+              <div class="t" data-l="thinking"></div>
+              <div class="s"><span class="dots"><span></span><span></span><span></span></span> <span id="elapsed"></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <form class="composer" id="composer" autocomplete="off">
+        <div class="composer-inner">
+          <label class="sr" for="input">メッセージ</label>
+          <textarea id="input" rows="1"></textarea>
+          <button class="sendbtn" id="send-btn" type="submit" aria-label="送信" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 12h15M13 6l6 6-6 6"/></svg>
+          </button>
+        </div>
+        <div class="hint" data-l="hint"></div>
+      </form>
+    </main>
+  </div>
+
+ </div>
 </div>
 
-<dialog id="prompt-dialog">
-  <form method="dialog">
-    <h2>システムプロンプト設定</h2>
-    <p class="hint">このプロンプトがAIの応答スタイルを決めます。空欄にするとデフォルトに戻ります。</p>
-    <textarea id="prompt-textarea" rows="12"></textarea>
-    <footer>
-      <button id="prompt-save" type="button">保存</button>
-      <button type="reset" formmethod="dialog">キャンセル</button>
-    </footer>
-  </form>
+<!-- ユーザー選択 -->
+<dialog id="user-dialog">
+  <div class="dlg-head" data-l="whoUses"></div>
+  <div class="dlg-body">
+    <div class="userGrid" id="user-grid"></div>
+    <button class="selfAvatar" id="self-avatar-btn" type="button">
+      <img id="self-avatar-img" src="/public/img/avatars/pikachu-face.png" alt="">
+      <span data-l="changeMyIcon"></span>
+    </button>
+    <div class="fieldlabel" data-l="fontSize"></div>
+    <div class="segment" id="fontsize-seg">
+      <button type="button" data-size="normal" data-l="fsNormal"></button>
+      <button type="button" data-size="large"  data-l="fsLarge"></button>
+    </div>
+  </div>
+  <div class="dlg-foot"><button class="btn" data-close type="button" data-l="close"></button></div>
 </dialog>
+
+<!-- PIN -->
+<dialog id="pin-dialog">
+  <div class="dlg-head" data-l="parentSettings"></div>
+  <div class="dlg-body" id="pin-wrap">
+    <p class="note" data-l="pinNote"></p>
+    <div class="pin-dots" id="pin-dots"><i></i><i></i><i></i><i></i></div>
+    <div class="keypad" id="keypad">
+      <button type="button">1</button><button type="button">2</button><button type="button">3</button>
+      <button type="button">4</button><button type="button">5</button><button type="button">6</button>
+      <button type="button">7</button><button type="button">8</button><button type="button">9</button>
+      <button type="button" data-act="clear">C</button>
+      <button type="button">0</button>
+      <button type="button" data-act="back">←</button>
+    </div>
+  </div>
+  <div class="dlg-foot"><button class="btn" data-close type="button" data-l="cancel"></button></div>
+</dialog>
+
+<!-- 設定（保護者用） -->
+<dialog id="settings-dialog">
+  <div class="dlg-head" data-l="parentSettings"></div>
+  <div class="dlg-body">
+    <div class="fieldlabel" data-l="modeLabel"></div>
+    <div id="mode-list"></div>
+
+    <div class="fieldlabel" data-l="promptLabel"></div>
+    <div class="prompt-target">
+      <span data-l="promptUser"></span>
+      <select id="prompt-user"></select>
+    </div>
+    <textarea id="prompt-textarea" rows="10"></textarea>
+    <p class="note" data-l="promptNote"></p>
+
+    <div class="fieldlabel" data-l="appearance"></div>
+    <div class="segment" id="theme-seg">
+      <button type="button" data-theme="auto"  data-l="thAuto"></button>
+      <button type="button" data-theme="light" data-l="thLight"></button>
+      <button type="button" data-theme="dark"  data-l="thDark"></button>
+    </div>
+
+    <div class="fieldlabel" data-l="pinChange"></div>
+    <div class="pinchange">
+      <input type="text" id="new-pin" inputmode="numeric" pattern="\d{4}" maxlength="4" placeholder="1234">
+      <button class="btn" id="pin-save" type="button" data-l="change"></button>
+    </div>
+  </div>
+  <div class="dlg-foot">
+    <button class="btn" data-close type="button" data-l="close"></button>
+    <button class="btn primary" id="prompt-save" type="button" data-l="save"></button>
+  </div>
+</dialog>
+
+<!-- アバター選択（保護者用） -->
+<dialog id="avatar-dialog">
+  <div class="dlg-head" data-l="avatarTitle"></div>
+  <div class="dlg-body"><div class="avatarGrid" id="avatar-grid"></div></div>
+  <div class="dlg-foot"><button class="btn" data-close type="button" data-l="cancel"></button></div>
+</dialog>
+
+<!-- ユーザー追加 -->
+<dialog id="adduser-dialog">
+  <div class="dlg-head" data-l="addUserTitle"></div>
+  <div class="dlg-body">
+    <input type="text" id="adduser-name" maxlength="20" placeholder="なまえ">
+  </div>
+  <div class="dlg-foot">
+    <button class="btn" data-close type="button" data-l="cancel"></button>
+    <button class="btn primary" id="adduser-ok" type="button" data-l="add"></button>
+  </div>
+</dialog>
+
+<!-- 名前変更 -->
+<dialog id="rename-dialog">
+  <div class="dlg-head" data-l="renameTitle"></div>
+  <div class="dlg-body"><input type="text" id="rename-input" maxlength="60"></div>
+  <div class="dlg-foot">
+    <button class="btn" data-close type="button" data-l="cancel"></button>
+    <button class="btn primary" id="rename-ok" type="button" data-l="change"></button>
+  </div>
+</dialog>
+
+<!-- ユーザー削除確認 -->
+<dialog id="deluser-dialog">
+  <div class="dlg-head" data-l="delUserTitle"></div>
+  <div class="dlg-body">
+    <p class="note" id="deluser-target"></p>
+    <p data-l="delUserWarn"></p>
+  </div>
+  <div class="dlg-foot">
+    <button class="btn" data-close type="button" data-l="cancel"></button>
+    <button class="btn danger" id="deluser-ok" type="button" data-l="del"></button>
+  </div>
+</dialog>
+
+<!-- 削除確認 -->
+<dialog id="delete-dialog">
+  <div class="dlg-head" data-l="delTitle"></div>
+  <div class="dlg-body"><p class="note" id="delete-target"></p><p data-l="delWarn"></p></div>
+  <div class="dlg-foot">
+    <button class="btn" data-close type="button" data-l="cancel"></button>
+    <button class="btn danger" id="delete-ok" type="button" data-l="del"></button>
+  </div>
+</dialog>
+
+<div id="toast" role="status"></div>
 
 <script src="/public/marked.js"></script>
 <script src="/public/app.js"></script>
