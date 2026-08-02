@@ -123,6 +123,21 @@ export function resetSession(channelId: string): void {
   console.log(`[conversation] セッションリセット: ${sid}`);
 }
 
+/**
+ * 先頭に残った孤立した role:"tool" を取り除く。
+ *
+ * OpenAI 互換 API では role:"tool" の直前に tool_calls を持つ assistant が
+ * 必要で、履歴を件数で切り詰めるとこのペアが分断されて 400 になる。
+ * 切断位置が tool の途中に来た場合は、その tool 群をまとめて捨てる。
+ */
+function dropOrphanToolMessages(messages: ChatMessage[]): ChatMessage[] {
+  let start = 0;
+  while (start < messages.length && messages[start].role === "tool") {
+    start++;
+  }
+  return start === 0 ? messages : messages.slice(start);
+}
+
 export function prepareMessages(
   sessionIdStr: string,
   userMessage: string,
@@ -141,7 +156,11 @@ export function prepareMessages(
 
   if (messages.length > MAX_MESSAGES) {
     const systemMsg = messages[0];
-    messages = [systemMsg, ...messages.slice(-(MAX_MESSAGES - 1))];
+    messages = [systemMsg, ...dropOrphanToolMessages(messages.slice(-(MAX_MESSAGES - 1)))];
+  } else {
+    // 既存 DB に壊れた履歴が残っているケースの保険
+    const [systemMsg, ...rest] = messages;
+    messages = [systemMsg, ...dropOrphanToolMessages(rest)];
   }
 
   const totalChars = messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
