@@ -63,7 +63,11 @@ BOT トークンや CF-Access 認証情報を含む。本番では `wrangler sec
 - **Worker → Pi 間は Cloudflare Tunnel + Access 認証**で保護されている（`CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`）。
 - **Pi 側の AI 処理完了後、Webhook PATCH で直接 Discord の元応答を編集する**（Worker を経由しない）。
 - **セッションはチャンネル単位**（`channel:{channelId}`）。TTL 30分、最大20メッセージ。
-- **ツール呼び出しループは最大30回**。ツール結果は2000文字で切り詰められる。
+- **ツール呼び出しループは最大30回**。ツール結果は2000文字で切り詰められる（分析系ツールは出力の 9 割以上が失われる。ADR-0006 で見直し予定）。
+- **打ち切り時は無言で終わらせない**。ツール上限に到達した場合と Discord の締切に達した場合は、`tools` を渡さずにもう一度生成し、そこまでに集めた情報で回答をまとめさせる（`finalizeWithoutTools()`）。生成にも失敗したときだけ固定文言を返す。
+- **`finish_reason: "length"` は打ち切って明示する**。出力が `max_tokens` (4096) に達した場合、ツール呼び出しが混ざっていても引数が壊れている可能性があるため実行せず、途切れた旨の注記を付けて返す。
+- **Discord は 12 分でツール呼び出しを打ち切る**。interaction token の失効（15分）までに応答手段が失われるのを防ぐため、3分のマージンを引いた締切を `runAsk()` で設定している。Web 側に締切はない。
+- **外部通信にはタイムアウトがある**。OpenCode Go API は 120 秒、MCP ツール実行は 60 秒（`AbortSignal.timeout`）。ツール実行の失敗は例外にせず、失敗内容を文字列で AI に返してループを継続する。
 - **Discord メッセージは1900文字で分割**（改行境界）、初回 PATCH、以降 POST で追加送信。
 
 ## rpi-bridge: better-sqlite3
