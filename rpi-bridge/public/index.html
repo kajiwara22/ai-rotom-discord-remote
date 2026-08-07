@@ -72,7 +72,8 @@
       <form class="composer" id="composer" autocomplete="off">
         <div class="composer-inner">
           <label class="sr" for="input">メッセージ</label>
-          <textarea id="input" rows="1"></textarea>
+          <!-- enterkeyhint="enter": ソフトキーボードの Enter を「改行」キーとして表示する -->
+          <textarea id="input" rows="1" enterkeyhint="enter"></textarea>
           <button class="sendbtn" id="send-btn" type="submit" aria-label="送信" disabled>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
               <path d="M4 12h15M13 6l6 6-6 6"/></svg>

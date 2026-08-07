@@ -9,6 +9,10 @@
   const $ = (sel) => document.querySelector(sel);
   const root = document.documentElement;
 
+  // ソフトキーボード端末（スマホ・タブレット）。Shift + Enter が押せないため
+  // Enter は改行として扱い、送信は送信ボタンのみとする
+  const isSoftKeyboard = window.matchMedia("(hover: none) and (pointer: coarse)").matches;
+
   /* ---------- 語彙テーブル ---------- */
   const L = {
     kids: {
@@ -20,6 +24,7 @@
       emptyDesc: "したの ボタンを おすか、じぶんで かいてみてね",
       placeholder: "しつもんを かいてね",
       hint: "Enter でおくる / Shift + Enter で かいぎょう",
+      hintTouch: "→ ボタンで おくる / Enter で かいぎょう",
       thinking: "ロトムが しらべているよ！",
       sec: (n) => n + "びょう",
       speak: "よみあげ", copy: "コピー",
@@ -69,6 +74,7 @@
       emptyDesc: "下の例を選ぶか、自由に質問してください",
       placeholder: "ポケモンや対戦について質問する",
       hint: "Enter で送信 / Shift + Enter で改行",
+      hintTouch: "→ ボタンで送信 / Enter で改行",
       thinking: "ロトムが調べています",
       sec: (n) => n + "秒",
       speak: "読み上げ", copy: "コピー",
@@ -202,6 +208,8 @@
       const v = d[el.dataset.l];
       if (typeof v === "string") el.textContent = v;
     });
+    const hintEl = $('[data-l="hint"]');
+    if (hintEl && isSoftKeyboard) hintEl.textContent = d.hintTouch;
     els.input.placeholder = d.placeholder;
     $("#thinking-img").src = avatarUrl(d.thinkingImg);
     document.title = d.appName;
@@ -961,10 +969,13 @@
 
     els.input.addEventListener("input", autoGrow);
     els.input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
-        e.preventDefault();
-        send();
-      }
+      // スマホ・タブレットでは Enter はそのまま改行させる
+      if (isSoftKeyboard) return;
+      if (e.key !== "Enter" || e.shiftKey) return;
+      // IME 変換中の確定 Enter を送信と誤認しない（keyCode 229 は Safari 等の保険）
+      if (e.isComposing || e.keyCode === 229) return;
+      e.preventDefault();
+      send();
     });
     $("#composer").addEventListener("submit", (e) => {
       e.preventDefault();
