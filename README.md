@@ -84,6 +84,7 @@ Web UI は Pi が直接配信するため、Discord / Worker を経由しませ�
 - **ユーザー切り替え** — アバター付きカードで選択。選択内容は `localStorage` に保存
 - **セッション管理** — 作成・切り替え・名前変更・削除。名前は最初の発言から自動生成
 - **Markdown 表示** — 表・リスト・コードブロックに対応。表は横スクロールして狭い画面でも崩れない
+- **待機中の進捗表示** — 「カバルドンを しらべているよ」のように、AI がいま何を調べているかを表示。途中で中止もできる
 - **読み上げ** — Web Speech API（ja-JP）で回答を音読
 - **アイコン変更** — 16種類のポケモンから選択
 - **文字サイズ切り替え** — 標準／大きい（モードとは独立して上乗せ）
@@ -349,7 +350,7 @@ curl -X POST http://localhost:3210/ask \
 | GET | `/api/parent/status` | PIN 設定状況 |  |
 | POST | `/api/parent/verify` | PIN 認証・トークン発行 |  |
 | PUT | `/api/parent/pin` | PIN 変更 | ✅ |
-| POST | `/api/web/ask` | Web 用 AI 質問 |  |
+| POST | `/api/web/ask` | Web 用 AI 質問（SSE / JSON） |  |
 | POST | `/api/web/reset` | Web 用会話リセット |  |
 | GET | `/api/sessions?user_id=` | セッション一覧 |  |
 | GET | `/api/sessions/:id` | メッセージ履歴 |  |
@@ -357,6 +358,18 @@ curl -X POST http://localhost:3210/ask \
 | DELETE | `/api/sessions/:id?user_id=` | セッション削除 |  |
 
 セッション削除は `user_id` を必ず条件に含めるため、他ユーザーのセッションは削除できません（404 を返します）。
+
+`POST /api/web/ask` は `Accept: text/event-stream` を送ると SSE で応答し、ツール実行のたびに進捗を流します。Accept を指定しなければ従来どおり単発の JSON を返すため、curl からの動作確認はそのまま使えます。
+
+```
+event: tool
+data: {"kind":"lookup","tool":"get_pokemon_info","target":"カバルドン"}
+
+event: done
+data: {"session_id":"...","reply":"..."}
+```
+
+`kind` は `lookup` / `search` / `calculate` / `analyze` / `party` の5種類です。**表示する文言はクライアント側の語彙テーブルが持ちます**（→ [ADR-0008](docs/adr/ADR-0008.md)）。ツール名をそのまま画面に出さないためです。
 
 ## データベース構成
 
@@ -440,6 +453,7 @@ ai-rotom-discord-remote/
 │   │   ├── tool-definitions.ts    # ツール定義 (30種) + 既定システムプロンプト
 │   │   ├── tool-result-formatter.ts # ツール結果の整形（巨大な出力を要点へ圧縮）
 │   │   ├── party-namespace.ts     # パーティ保存のユーザー分離
+│   │   ├── tool-progress.ts       # ツール実行の進捗記述子（SSE 用）
 │   │   ├── db.ts                  # SQLite 初期化・マイグレーション
 │   │   └── types.ts               # 型定義
 │   ├── public/                    # Web UI（ビルド不要の静的ファイル）

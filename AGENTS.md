@@ -72,6 +72,11 @@ BOT トークンや CF-Access 認証情報を含む。本番では `wrangler sec
 - **Discord は 12 分でツール呼び出しを打ち切る**。interaction token の失効（15分）までに応答手段が失われるのを防ぐため、3分のマージンを引いた締切を `runAsk()` で設定している。Web 側に締切はない。
 - **外部通信にはタイムアウトがある**。OpenCode Go API は 120 秒、MCP ツール実行は 60 秒（`AbortSignal.timeout`）。ツール実行の失敗は例外にせず、失敗内容を文字列で AI に返してループを継続する。
 - **Discord メッセージは1900文字で分割**（改行境界）、初回 PATCH、以降 POST で追加送信。
+- **`POST /api/web/ask` は Accept ヘッダーで SSE と JSON を切り替える**（[ADR-0008](docs/adr/ADR-0008.md)）。`text/event-stream` を含む場合のみ SSE。Discord は interaction の仕組み上 SSE を使えないため、経路ごとに方式が違う点を前提に置くこと。
+- **SSE の切断検知は `res.on("close")` を使う**。`req` の `"close"` はボディを読み終えた時点で発火済みのため、後から登録しても効かない。切断を検知しても**処理は止めない**（未完のツール往復を残さないため）。
+- **進捗は種別（`kind`）と対象名だけを送り、文言はクライアントが組み立てる**。ツール名を画面に出さないため。ツールを追加したら `tool-progress.ts` の分類と `app.js` の語彙テーブル（`L.kids` / `L.junior` の `progress`）を確認すること。
+- **Caddy 経由では SSE を圧縮対象から外す**必要がある（`deploy/caddy/Caddyfile` の `encode` の `match`）。圧縮を挟むとイベントがバッファに溜まる。
+- **Web API のフィールドは snake_case**。内部の camelCase は API 境界で変換する（`index.ts` の `toWebAskResponse()`）。`types.ts` の `WebAskResponse` を実際に使って型で守ること。
 
 ## rpi-bridge: better-sqlite3
 

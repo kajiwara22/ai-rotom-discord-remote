@@ -7,6 +7,7 @@ import {
   webNamespace,
   DISCORD_NAMESPACE,
 } from "./party-namespace.js";
+import { describeToolCall, type ToolProgress } from "./tool-progress.js";
 import {
   getOrCreateSession,
   loadMessages,
@@ -114,6 +115,7 @@ export async function executeToolCallLoop(
   baseUrl: string,
   executeTool: (name: string, args: Record<string, unknown>) => Promise<string>,
   deadlineAt?: number,
+  onProgress?: (progress: ToolProgress) => void,
 ): Promise<ChatMessage[]> {
   const messages: ChatMessage[] = [...initialMessages];
   let loop = 0;
@@ -174,6 +176,13 @@ export async function executeToolCallLoop(
       }
 
       console.log(`[ai] ツール実行: ${functionName} (loop=${loop})`);
+      // 進捗通知の失敗で本処理を落とさない
+      try {
+        onProgress?.(describeToolCall(functionName, functionArgs));
+      } catch (error) {
+        console.error("[ai] 進捗通知に失敗:", error);
+      }
+
       const result = await executeTool(functionName, functionArgs);
 
       // 結果は executeTool 側（整形層）で LLM に渡せる大きさに整えられている
@@ -242,6 +251,7 @@ async function processAiMessages(
   bridgeUrl: string,
   namespace: string,
   deadlineAt?: number,
+  onProgress?: (progress: ToolProgress) => void,
 ): Promise<ChatMessage[]> {
   const messages = prepareMessages(sessionId, userMessage, systemPrompt);
 
@@ -252,6 +262,7 @@ async function processAiMessages(
     baseUrl,
     createToolExecutor(bridgeUrl, namespace),
     deadlineAt,
+    onProgress,
   );
 
   saveMessages(sessionId, resultMessages);
@@ -328,6 +339,8 @@ export interface WebAskContext {
   apiKey: string;
   baseUrl: string;
   bridgeUrl: string;
+  /** SSE で進捗を配信する場合に渡す。省略時は通知しない */
+  onProgress?: (progress: ToolProgress) => void;
 }
 
 export async function runAskForWeb(
@@ -346,6 +359,8 @@ export async function runAskForWeb(
     ctx.baseUrl,
     ctx.bridgeUrl,
     webNamespace(ctx.userId),
+    undefined,
+    ctx.onProgress,
   );
 
   // 新規セッションは最初の発言をそのままセッション名にする。

@@ -381,9 +381,22 @@ button { font: inherit; color: inherit; }
 .thinking img { width: 54px; height: 54px; object-fit: contain; }
 :root[data-mode="junior"] .thinking img { width: 26px; height: 26px; animation: spin 1.6s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+.thinking .thinking-text { min-width: 0; flex: 1 1 auto; }
 .thinking .t { font-weight: 700; }
 :root[data-mode="junior"] .thinking .t { font-weight: 600; font-size: .9rem; color: var(--text-mute); }
 .thinking .s { color: var(--text-mute); font-size: .8rem; }
+
+/* 送信の取り消し。処理中だけ現れる */
+.stopbtn {
+  flex: 0 0 auto;
+  border: 2px solid var(--line); border-radius: 999px;
+  background: var(--panel-bg); color: var(--text-mute);
+  padding: 6px 14px; font: inherit; font-size: .8rem; font-weight: 700;
+  cursor: pointer;
+}
+:root[data-mode="junior"] .stopbtn { border-width: 1px; font-weight: 600; font-size: .75rem; }
+.stopbtn:active { transform: translateY(1px); }
+.stopbtn:disabled { opacity: .5; cursor: not-allowed; }
 .dots span {
   display: inline-block; width: 7px; height: 7px; margin-right: 3px;
   background: var(--rotom-cyan); border-radius: 50%;

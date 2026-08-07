@@ -26,6 +26,16 @@
       hint: "Enter でおくる / Shift + Enter で かいぎょう",
       hintTouch: "→ ボタンで おくる / Enter で かいぎょう",
       thinking: "ロトムが しらべているよ！",
+      stop: "やめる",
+      stopped: "とちゅうで やめたよ",
+      // ツールの種別ごとの待機文言。サーバーは種別と対象名だけを送る
+      progress: {
+        lookup: (x) => (x ? x + " を しらべているよ" : "ずかんを みているよ"),
+        search: (x) => (x ? x + " の なかまを さがしているよ" : "ポケモンを さがしているよ"),
+        calculate: (x) => (x ? x + " の つよさを けいさんしているよ" : "けいさん しているよ"),
+        analyze: (x) => (x ? x + " を くらべているよ" : "さくせんを かんがえているよ"),
+        party: () => "パーティを みているよ",
+      },
       sec: (n) => n + "びょう",
       speak: "よみあげ", copy: "コピー",
       rename: "なまえを かえる", del: "けす",
@@ -76,6 +86,15 @@
       hint: "Enter で送信 / Shift + Enter で改行",
       hintTouch: "→ ボタンで送信 / Enter で改行",
       thinking: "ロトムが調べています",
+      stop: "中止",
+      stopped: "送信を中止しました",
+      progress: {
+        lookup: (x) => (x ? x + " のデータを取得中" : "データを取得中"),
+        search: (x) => (x ? x + " から候補を検索中" : "候補を検索中"),
+        calculate: (x) => (x ? x + " のダメージを計算中" : "ダメージを計算中"),
+        analyze: (x) => (x ? x + " の対面を分析中" : "対面を分析中"),
+        party: () => "パーティを読み書き中",
+      },
       sec: (n) => n + "秒",
       speak: "読み上げ", copy: "コピー",
       rename: "名前を変更", del: "削除",
@@ -131,6 +150,7 @@
     list: $("#session-list"),
     inner: $("#messages-inner"), scroll: $("#messages"),
     thinking: $("#thinking"), elapsed: $("#elapsed"),
+    thinkingLabel: $("#thinking-label"), stop: $("#stop-btn"),
     input: $("#input"), send: $("#send-btn"),
   };
 
@@ -141,6 +161,8 @@
   let sending = false;
   let parentToken = null;
   let timer = null;
+  /** 送信中の AbortController。中止ボタンが使う */
+  let currentAbort = null;
 
   const t = () => L[currentUser ? currentUser.mode : "kids"];
 
@@ -560,6 +582,52 @@
     els.send.disabled = !els.input.value.trim() || sending;
   }
 
+  /** 待機中の見出しを差し替える。ツールの進捗が届くたびに呼ばれる */
+  function setThinkingLabel(text) {
+    els.thinkingLabel.textContent = text;
+  }
+
+  /** 進捗イベントをモード別の文言に変換する */
+  function progressText(p) {
+    const d = t();
+    const fn = d.progress && d.progress[p.kind];
+    return typeof fn === "function" ? fn(p.target) : d.thinking;
+  }
+
+  /**
+   * SSE を読み、イベントごとに onEvent を呼ぶ。
+   * POST に対する応答なので EventSource は使えず、自前で区切る。
+   */
+  async function readEventStream(res, onEvent) {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buf += decoder.decode(chunk.value, { stream: true });
+
+      let i;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const block = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+
+        let name = "message";
+        let data = "";
+        block.split("\n").forEach((line) => {
+          if (line.indexOf("event:") === 0) name = line.slice(6).trim();
+          else if (line.indexOf("data:") === 0) data += line.slice(5).trim();
+        });
+        if (!data) continue;
+        try {
+          onEvent(name, JSON.parse(data));
+        } catch (e) {
+          /* 壊れた行は捨てる */
+        }
+      }
+    }
+  }
+
   async function send() {
     const text = els.input.value.trim();
     if (!text || sending || !currentUser) return;
@@ -576,6 +644,8 @@
 
     sending = true;
     els.send.disabled = true;
+    setThinkingLabel(d.thinking);
+    els.stop.disabled = false;
     els.thinking.classList.add("on");
     let sec = 0;
     els.elapsed.textContent = d.sec(0);
@@ -584,24 +654,59 @@
       els.elapsed.textContent = t().sec(sec);
     }, 1000);
 
+    const controller = new AbortController();
+    currentAbort = controller;
+
     try {
       const body = { user_id: currentUser.user_id, message: text };
       if (currentSessionId) body.session_id = currentSessionId;
 
-      const data = await api("/api/web/ask", {
+      const res = await fetch("/api/web/ask", {
         method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
+
+      if (!res.ok) {
+        const raw = await res.text();
+        let msg = "HTTP " + res.status;
+        try {
+          const j = JSON.parse(raw);
+          if (j && j.error) msg = j.error;
+        } catch (e) { /* JSON でなければステータスのまま */ }
+        throw new Error(msg);
+      }
+
+      let data = null;
+      let failure = null;
+
+      // サーバーが SSE を返さない構成でも動くようにしておく
+      if ((res.headers.get("content-type") || "").indexOf("text/event-stream") >= 0) {
+        await readEventStream(res, (name, payload) => {
+          if (name === "tool") setThinkingLabel(progressText(payload));
+          else if (name === "done") data = payload;
+          else if (name === "error") failure = payload && payload.error;
+        });
+      } else {
+        data = await res.json();
+      }
+
+      if (failure) throw new Error(failure);
+      if (!data) throw new Error(d.errTitle);
 
       if (data.session_id) currentSessionId = data.session_id;
       appendMessage("assistant", data.reply || "（回答がありませんでした）");
       scrollBottom();
       await loadSessions();
     } catch (e) {
-      appendError(e.message, text);
+      // 中止はエラーではない。サーバー側の処理は続くため履歴には残る
+      if (e && e.name === "AbortError") toast(t().stopped);
+      else appendError(e.message, text);
     } finally {
       clearInterval(timer);
       els.thinking.classList.remove("on");
+      currentAbort = null;
       sending = false;
       autoGrow();
     }
@@ -859,6 +964,12 @@
       els.scrim.classList.add("show");
     });
     els.scrim.addEventListener("click", closeDrawer);
+
+    els.stop.addEventListener("click", () => {
+      if (!currentAbort) return;
+      els.stop.disabled = true;
+      currentAbort.abort();
+    });
 
     $("#new-chat-btn").addEventListener("click", () => {
       currentSessionId = null;

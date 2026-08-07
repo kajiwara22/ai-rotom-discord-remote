@@ -4,7 +4,13 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { readFileSync, existsSync } from "node:fs";
 import { join, extname } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { AskRequest, AskResponse, WebAskRequest, WebResetRequest } from "./types.js";
+import type {
+  AskRequest,
+  AskResponse,
+  WebAskRequest,
+  WebAskResponse,
+  WebResetRequest,
+} from "./types.js";
 import { runAsk, runAskForWeb } from "./ai-service.js";
 import {
   deleteExpiredSessions,
@@ -551,7 +557,33 @@ async function handleDiscordReset(req: IncomingMessage, res: ServerResponse): Pr
   }
 }
 
+/**
+ * 内部の camelCase を Web API の snake_case へ揃える。
+ *
+ * 他の Web API はすべて snake_case であり、クライアントと `WebAskResponse` も
+ * `session_id` を前提にしている。ここを素通しすると `session_id` が届かず、
+ * 新しいセッション ID がクライアントに渡らないため会話が継続しない。
+ */
+function toWebAskResponse(result: { sessionId: string; reply: string }): WebAskResponse {
+  return { session_id: result.sessionId, reply: result.reply };
+}
+
+/**
+ * SSE でイベントを送る関数を作る。
+ * クライアントが切断した後の書き込みは無視する（処理自体は止めない）。
+ */
+function createEventSender(res: ServerResponse): (event: string, data: unknown) => void {
+  return (event, data) => {
+    if (res.writableEnded || res.destroyed) return;
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+}
+
 async function handleWebAsk(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  // Accept ヘッダーで SSE と従来の JSON を切り替える。
+  // curl などからの単発呼び出しは JSON のまま使える
+  const wantsSse = String(req.headers.accept ?? "").includes("text/event-stream");
+
   try {
     if (!OPENCODE_GO_API_KEY) {
       res.writeHead(500, { "Content-Type": "application/json" });
@@ -570,20 +602,62 @@ async function handleWebAsk(req: IncomingMessage, res: ServerResponse): Promise<
 
     ensureUser(webReq.user_id);
 
-    console.log(`[web-ask] userId=${webReq.user_id} session=${webReq.session_id ?? "(新規)"} message="${webReq.message.substring(0, 50)}..."`);
+    console.log(`[web-ask] userId=${webReq.user_id} session=${webReq.session_id ?? "(新規)"} sse=${wantsSse} message="${webReq.message.substring(0, 50)}..."`);
 
-    const result = await runAskForWeb(webReq.message, {
-      userId: webReq.user_id,
-      sessionId: webReq.session_id,
-      apiKey: OPENCODE_GO_API_KEY,
-      baseUrl: OPENCODE_GO_BASE_URL,
-      bridgeUrl: BRIDGE_URL,
+    if (!wantsSse) {
+      const result = await runAskForWeb(webReq.message, {
+        userId: webReq.user_id,
+        sessionId: webReq.session_id,
+        apiKey: OPENCODE_GO_API_KEY,
+        baseUrl: OPENCODE_GO_BASE_URL,
+        bridgeUrl: BRIDGE_URL,
+      });
+
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(toWebAskResponse(result)));
+      return;
+    }
+
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      "Connection": "keep-alive",
+    });
+    const send = createEventSender(res);
+
+    // クライアントが離れても処理は続ける（ADR-0008）。
+    // 途中で殺すと未完のツール往復が残るうえ、既に払ったコストも捨てることになる。
+    //
+    // req の "close" はボディを読み終えた時点で発火済みのため使えない。
+    // res の "close" が end() より前に来たものだけが本当の切断である。
+    res.on("close", () => {
+      if (!res.writableEnded) {
+        console.log(`[web-ask] クライアント切断（処理は継続）: userId=${webReq.user_id}`);
+      }
     });
 
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(result));
+    try {
+      const result = await runAskForWeb(webReq.message, {
+        userId: webReq.user_id,
+        sessionId: webReq.session_id,
+        apiKey: OPENCODE_GO_API_KEY,
+        baseUrl: OPENCODE_GO_BASE_URL,
+        bridgeUrl: BRIDGE_URL,
+        onProgress: (progress) => send("tool", progress),
+      });
+      send("done", toWebAskResponse(result));
+    } catch (error) {
+      console.error("[web-ask] エラー:", error);
+      send("error", { error: String(error) });
+    }
+    res.end();
   } catch (error) {
     console.error("[web-ask] エラー:", error);
+    if (res.headersSent) {
+      createEventSender(res)("error", { error: String(error) });
+      res.end();
+      return;
+    }
     res.writeHead(500, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: String(error) }));
   }
