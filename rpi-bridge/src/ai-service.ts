@@ -2,6 +2,12 @@ import type { ChatMessage, ToolCall, ToolDefinition, OpenCodeGoResponse } from "
 import { TOOL_DEFINITIONS } from "./tool-definitions.js";
 import { formatToolResult } from "./tool-result-formatter.js";
 import {
+  applyPartyNamespace,
+  stripPartyNamespace,
+  webNamespace,
+  DISCORD_NAMESPACE,
+} from "./party-namespace.js";
+import {
   getOrCreateSession,
   loadMessages,
   saveMessages,
@@ -190,14 +196,17 @@ export async function executeToolCallLoop(
   );
 }
 
-function createToolExecutor(bridgeUrl: string) {
+function createToolExecutor(bridgeUrl: string, namespace: string) {
   return async (toolName: string, args: Record<string, unknown>): Promise<string> => {
+    // パーティ系ツールは利用者ごとの名前空間を付けてから呼ぶ
+    const scopedArgs = applyPartyNamespace(toolName, args, namespace);
+
     let response: Response;
     try {
       response = await fetch(`${bridgeUrl}/tools/${toolName}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(args),
+        body: JSON.stringify(scopedArgs),
         signal: AbortSignal.timeout(TOOL_TIMEOUT_MS),
       });
     } catch (error) {
@@ -219,7 +228,8 @@ function createToolExecutor(bridgeUrl: string) {
     }
     const raw = bridgeResult.result?.content?.[0]?.text
       ?? JSON.stringify(bridgeResult.result);
-    return formatToolResult(toolName, raw);
+    // 名前空間を外してから整形する（AI と利用者には元の名前だけを見せる）
+    return formatToolResult(toolName, stripPartyNamespace(toolName, raw, namespace));
   };
 }
 
@@ -230,6 +240,7 @@ async function processAiMessages(
   apiKey: string,
   baseUrl: string,
   bridgeUrl: string,
+  namespace: string,
   deadlineAt?: number,
 ): Promise<ChatMessage[]> {
   const messages = prepareMessages(sessionId, userMessage, systemPrompt);
@@ -239,7 +250,7 @@ async function processAiMessages(
     TOOL_DEFINITIONS,
     apiKey,
     baseUrl,
-    createToolExecutor(bridgeUrl),
+    createToolExecutor(bridgeUrl, namespace),
     deadlineAt,
   );
 
@@ -282,6 +293,7 @@ export async function runAsk(
       ctx.apiKey,
       ctx.baseUrl,
       ctx.bridgeUrl,
+      DISCORD_NAMESPACE,
       deadlineAt,
     );
 
@@ -333,6 +345,7 @@ export async function runAskForWeb(
     ctx.apiKey,
     ctx.baseUrl,
     ctx.bridgeUrl,
+    webNamespace(ctx.userId),
   );
 
   // 新規セッションは最初の発言をそのままセッション名にする。
