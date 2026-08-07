@@ -2,8 +2,13 @@ import type { ChatMessage, ConversationSession, SessionInfo, UserInfo, UserMode 
 import { getSystemPrompt, DISCORD_RESTRICTIONS } from "./tool-definitions.js";
 import { getDb, SESSION_TTL_MS, WEB_SESSION_TTL_MS } from "./db.js";
 import crypto from "node:crypto";
-const MAX_TOOL_RESULT = 2000;
-const MAX_MESSAGES = 20;
+/**
+ * LLM へ渡す会話履歴（user / assistant のテキスト）の上限。
+ * ツール往復はこの数に含めない。role を問わず数えていた頃は、ツールを
+ * 8 回呼ぶだけで枠が埋まり、実質 1〜2 往復しか記憶が残らなかった。
+ * 詳しくは docs/adr/ADR-0006.md を参照。
+ */
+const MAX_CONVERSATION_MESSAGES = 20;
 
 function sessionId(channelId: string): string {
   return `channel:${channelId}`;
@@ -85,16 +90,13 @@ export function saveMessages(sessionIdStr: string, messages: ChatMessage[]): voi
     "INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
   );
 
+  // ツール結果は tool-result-formatter.ts で整形済みのため、ここでは切り詰めない
   const insertMany = db.transaction((msgs: ChatMessage[]) => {
     for (const msg of msgs) {
-      let content = msg.content;
-      if (msg.role === "tool" && content && content.length > MAX_TOOL_RESULT) {
-        content = content.slice(0, MAX_TOOL_RESULT) + "\n...(省略)";
-      }
       insert.run(
         sessionIdStr,
         msg.role,
-        content,
+        msg.content,
         msg.tool_call_id ?? null,
         msg.tool_calls ? JSON.stringify(msg.tool_calls) : null,
         now,
@@ -138,33 +140,56 @@ function dropOrphanToolMessages(messages: ChatMessage[]): ChatMessage[] {
   return start === 0 ? messages : messages.slice(start);
 }
 
+/**
+ * 履歴を役割別に絞る。
+ *
+ * 過去ターンのツール往復（role:"tool" と tool_calls 付き assistant）は落とし、
+ * 会話として意味のある user / assistant のテキストだけを残す。過去に調べた
+ * 数値は assistant の回答本文に含まれているため、生のツール結果を持ち回る
+ * 価値は低い。
+ *
+ * 最後の user 以降（＝今回の質問）は件数上限に関係なく残す。中断などで
+ * 未完のツール往復が DB に残っている場合、その断片は過去側として落ちる。
+ */
+function trimHistory(messages: ChatMessage[]): ChatMessage[] {
+  const [systemMsg, ...rest] = messages;
+
+  const lastUserIndex = rest.map((m) => m.role).lastIndexOf("user");
+  const past = lastUserIndex < 0 ? rest : rest.slice(0, lastUserIndex);
+  const current = lastUserIndex < 0 ? [] : rest.slice(lastUserIndex);
+
+  const conversation = past.filter(
+    (m) => m.role === "user" || (m.role === "assistant" && m.content && !m.tool_calls),
+  );
+  const kept = conversation.slice(-(MAX_CONVERSATION_MESSAGES - 1));
+
+  // 既存 DB に壊れた履歴が残っているケースの保険。
+  // system を除いた並びに適用する（先頭に system があると何も落とせない）
+  return [systemMsg, ...dropOrphanToolMessages([...kept, ...current])];
+}
+
 export function prepareMessages(
   sessionIdStr: string,
   userMessage: string,
   systemPrompt: string,
 ): ChatMessage[] {
-  let messages = loadMessages(sessionIdStr);
+  const loaded = loadMessages(sessionIdStr);
 
-  if (messages.length === 0 || messages[0].role !== "system") {
-    messages.unshift({ role: "system", content: systemPrompt });
-  } else if (messages[0].content !== systemPrompt) {
+  if (loaded.length === 0 || loaded[0].role !== "system") {
+    loaded.unshift({ role: "system", content: systemPrompt });
+  } else if (loaded[0].content !== systemPrompt) {
     // プロンプトが変更された場合は更新
-    messages[0] = { role: "system", content: systemPrompt };
+    loaded[0] = { role: "system", content: systemPrompt };
   }
 
-  messages.push({ role: "user", content: userMessage });
+  loaded.push({ role: "user", content: userMessage });
 
-  if (messages.length > MAX_MESSAGES) {
-    const systemMsg = messages[0];
-    messages = [systemMsg, ...dropOrphanToolMessages(messages.slice(-(MAX_MESSAGES - 1)))];
-  } else {
-    // 既存 DB に壊れた履歴が残っているケースの保険
-    const [systemMsg, ...rest] = messages;
-    messages = [systemMsg, ...dropOrphanToolMessages(rest)];
-  }
+  const messages = trimHistory(loaded);
 
   const totalChars = messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
-  console.log(`[conversation] messages=${messages.length} totalChars=${totalChars}`);
+  console.log(
+    `[conversation] messages=${messages.length}/${loaded.length} totalChars=${totalChars}`,
+  );
 
   return messages;
 }

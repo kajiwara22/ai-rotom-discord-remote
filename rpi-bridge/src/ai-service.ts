@@ -1,5 +1,6 @@
 import type { ChatMessage, ToolCall, ToolDefinition, OpenCodeGoResponse } from "./types.js";
 import { TOOL_DEFINITIONS } from "./tool-definitions.js";
+import { formatToolResult } from "./tool-result-formatter.js";
 import {
   getOrCreateSession,
   loadMessages,
@@ -13,7 +14,6 @@ import { editOriginalResponse } from "./discord-webhook.js";
 
 const MODEL = "deepseek-v4-pro";
 const MAX_TOOL_CALLS = 30;
-const MAX_TOOL_RESULT = 2000;
 const MAX_TOKENS = 4096;
 
 /** API 1 回あたりの上限。応答が返らないまま処理全体が固まるのを防ぐ */
@@ -170,12 +170,11 @@ export async function executeToolCallLoop(
       console.log(`[ai] ツール実行: ${functionName} (loop=${loop})`);
       const result = await executeTool(functionName, functionArgs);
 
+      // 結果は executeTool 側（整形層）で LLM に渡せる大きさに整えられている
       messages.push({
         role: "tool",
         tool_call_id: toolCall.id,
-        content: result.length > MAX_TOOL_RESULT
-          ? result.slice(0, MAX_TOOL_RESULT) + "\n...(省略)"
-          : result,
+        content: result,
       });
     }
 
@@ -218,8 +217,9 @@ function createToolExecutor(bridgeUrl: string) {
     if (!bridgeResult.success) {
       return JSON.stringify({ success: false, error: bridgeResult.error });
     }
-    return bridgeResult.result?.content?.[0]?.text
+    const raw = bridgeResult.result?.content?.[0]?.text
       ?? JSON.stringify(bridgeResult.result);
+    return formatToolResult(toolName, raw);
   };
 }
 

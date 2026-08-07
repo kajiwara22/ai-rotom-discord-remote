@@ -390,7 +390,9 @@ Discord はチャンネルごと、Web はユーザーごとに独立したセ�
 
 TTL を延ばした後の初回起動時、旧仕様（30分）で作られた Web セッションの期限は自動で新しい保持期間へ引き延ばされます（`db.ts` の `extendWebSessionExpiry()`）。この移行がないと、設定変更直後に既存の履歴がまとめて削除されてしまいます。
 
-> なお、AI に送るメッセージは直近 20 件に絞られる（`MAX_MESSAGES`）ため、履歴が長期化してもコンテキスト長が際限なく膨らむことはありません。画面には全履歴が表示されます。
+> なお、AI に送る履歴は **user / assistant のやり取り直近 20 件**に絞られます（`MAX_CONVERSATION_MESSAGES`）。ツールの呼び出し記録はこの数に含めず、過去ターン分は落とします。過去に調べた数値は回答本文に残っているためです。画面には全履歴が表示されます。
+>
+> 以前は role を問わず 20 件だったため、ツールを 8 回呼ぶだけで枠が埋まり、実質 1〜2 往復しか記憶が残りませんでした（→ [ADR-0006](docs/adr/ADR-0006.md)）。
 
 ## Discord コマンド一覧
 
@@ -421,6 +423,7 @@ ai-rotom-discord-remote/
 │   │   ├── conversation-manager.ts # セッション/ユーザー/プロンプト/PIN 管理
 │   │   ├── discord-webhook.ts     # Discord Webhook 応答編集
 │   │   ├── tool-definitions.ts    # ツール定義 (30種) + 既定システムプロンプト
+│   │   ├── tool-result-formatter.ts # ツール結果の整形（巨大な出力を要点へ圧縮）
 │   │   ├── db.ts                  # SQLite 初期化・マイグレーション
 │   │   └── types.ts               # 型定義
 │   ├── public/                    # Web UI（ビルド不要の静的ファイル）
