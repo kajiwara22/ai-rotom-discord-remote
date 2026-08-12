@@ -50,7 +50,12 @@ export async function chatCompletion(
     ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
     max_tokens: MAX_TOKENS,
   });
-  console.log(`[ai] chatCompletion payloadSize=${payload.length} messages=${messages.length}`);
+  // ツール定義は毎ターン再送されるため、payloadSize のうち何が固定費で
+  // 何が会話の伸びなのかを分けて記録する
+  const toolsSize = tools.length > 0 ? JSON.stringify(tools).length : 0;
+  console.log(
+    `[ai] chatCompletion payloadSize=${payload.length} toolsSize=${toolsSize} messagesSize=${payload.length - toolsSize} messages=${messages.length}`,
+  );
 
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
@@ -184,6 +189,8 @@ export async function executeToolCallLoop(
       }
 
       const result = await executeTool(functionName, functionArgs);
+      // 整形後の実サイズ。ツールごとの寄与を後から集計するために残す
+      console.log(`[ai] ツール結果: ${functionName} chars=${result.length}`);
 
       // 結果は executeTool 側（整形層）で LLM に渡せる大きさに整えられている
       messages.push({
