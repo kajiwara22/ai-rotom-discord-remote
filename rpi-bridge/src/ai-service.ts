@@ -21,7 +21,12 @@ import { editOriginalResponse } from "./discord-webhook.js";
 
 const MODEL = "deepseek-v4-pro";
 const MAX_TOOL_CALLS = 30;
-const MAX_TOKENS = 4096;
+/**
+ * 1 回の生成の出力上限。4096 では分析系の回答がほぼ毎回途中で切れていた。
+ * Discord 側は discord-webhook.ts が 1900 文字ずつ分割送信するため、
+ * 上限を伸ばしても送信経路の制約には当たらない。
+ */
+const MAX_TOKENS = 8192;
 
 /** API 1 回あたりの上限。応答が返らないまま処理全体が固まるのを防ぐ */
 const API_TIMEOUT_MS = 120_000;
@@ -36,6 +41,34 @@ const DEADLINE_MARGIN_MS = 3 * 60 * 1000;
 
 const TRUNCATED_NOTICE =
   "\n\n---\n（回答が長くなりすぎたため、ここで途切れています。「続き」と聞くと続きから答えます）";
+
+/**
+ * 途中で切れた回答の続きを求められたとき、最初から書き直させないための補足。
+ *
+ * system の末尾に足すのは、prepareMessages が次回のリクエストで systemPrompt と
+ * 突き合わせて先頭を差し替えるため、この補足が履歴に焼き付かずに消えるからである。
+ * user 発言に足すと DB に残り、以降ずっとノイズになる。
+ */
+const CONTINUATION_HINT = `
+
+## 直前の回答について
+直前の回答は出力上限に達して途中で終わっています。
+利用者が続きを求めている場合は、すでに書いた内容を繰り返さず、途切れた箇所の直後から書き始めてください。`;
+
+/** 直前が途切れた回答なら、system に継続指示を足した配列を返す */
+function applyContinuationHint(messages: ChatMessage[]): ChatMessage[] {
+  // 末尾は今回の user 発言。その 1 つ手前が途切れた回答かどうかを見る
+  const previous = messages[messages.length - 2];
+  const isTruncated =
+    previous?.role === "assistant" && (previous.content?.endsWith(TRUNCATED_NOTICE) ?? false);
+  if (!isTruncated) return messages;
+
+  const [system, ...rest] = messages;
+  if (system?.role !== "system") return messages;
+
+  console.log("[ai] 直前の回答が途中終了しているため継続指示を付与");
+  return [{ ...system, content: (system.content ?? "") + CONTINUATION_HINT }, ...rest];
+}
 
 export async function chatCompletion(
   messages: ChatMessage[],
@@ -260,7 +293,9 @@ async function processAiMessages(
   deadlineAt?: number,
   onProgress?: (progress: ToolProgress) => void,
 ): Promise<ChatMessage[]> {
-  const messages = prepareMessages(sessionId, userMessage, systemPrompt);
+  const messages = applyContinuationHint(
+    prepareMessages(sessionId, userMessage, systemPrompt),
+  );
 
   const resultMessages = await executeToolCallLoop(
     messages,
