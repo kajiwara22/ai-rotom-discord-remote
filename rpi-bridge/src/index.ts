@@ -1,3 +1,5 @@
+// ログへの時刻付与。他モジュールより先に効かせたいので import の先頭に置く
+import "./log-timestamp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";

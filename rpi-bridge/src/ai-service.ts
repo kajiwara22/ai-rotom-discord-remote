@@ -22,6 +22,15 @@ import { editOriginalResponse } from "./discord-webhook.js";
 const MODEL = "deepseek-v4-pro";
 const MAX_TOOL_CALLS = 30;
 /**
+ * 推論モデルの思考量。既定では出力トークンの 7 割前後が思考に消え、
+ * 回答本文が書き切れないまま max_tokens に達する原因になっていた。
+ *
+ * "none" にすると思考を完全に止められるが、次にどのツールを呼ぶかの判断も
+ * 落ちるため採用しない。"low" は実測で思考量が約 1/3 になる。
+ * なお "minimal" は受け付けられず既定にフォールバックする。
+ */
+const REASONING_EFFORT = "low";
+/**
  * 1 回の生成の出力上限。4096 では分析系の回答がほぼ毎回途中で切れていた。
  * Discord 側は discord-webhook.ts が 1900 文字ずつ分割送信するため、
  * 上限を伸ばしても送信経路の制約には当たらない。
@@ -91,6 +100,7 @@ export async function chatCompletion(
     messages,
     ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
     max_tokens: MAX_TOKENS,
+    reasoning_effort: REASONING_EFFORT,
   });
   // ツール定義は毎ターン再送されるため、payloadSize のうち何が固定費で
   // 何が会話の伸びなのかを分けて記録する
@@ -126,6 +136,17 @@ export async function chatCompletion(
   }
 
   const data = (await response.json()) as OpenCodeGoResponse;
+
+  // reasoning_effort の効き具合と、固定 prefix であるツール定義がキャッシュに
+  // 乗っているかを追う。どちらもこの内訳がないと判断できない
+  const usage = data.usage;
+  if (usage) {
+    console.log(
+      `[ai] usage prompt=${usage.prompt_tokens} cacheHit=${usage.prompt_cache_hit_tokens ?? "-"}` +
+        ` completion=${usage.completion_tokens} reasoning=${usage.completion_tokens_details?.reasoning_tokens ?? 0}`,
+    );
+  }
+
   const choice = data.choices[0];
   const message = choice.message;
 

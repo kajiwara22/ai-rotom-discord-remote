@@ -79,6 +79,19 @@ export interface OpenCodeGoResponse {
     };
     finish_reason: string;
   }[];
+  /** 推論モデルのため completion には思考分が含まれる。内訳は reasoning_tokens を見る */
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    /** プロンプトキャッシュにヒットした入力トークン数 */
+    prompt_cache_hit_tokens?: number;
+    prompt_cache_miss_tokens?: number;
+    completion_tokens_details?: {
+      /** reasoning_effort を "none" にすると項目ごと返らない */
+      reasoning_tokens?: number;
+    };
+  };
 }
 
 export interface ConversationSession {
