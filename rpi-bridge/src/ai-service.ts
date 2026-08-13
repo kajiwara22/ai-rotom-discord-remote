@@ -28,8 +28,11 @@ const MAX_TOOL_CALLS = 30;
  */
 const MAX_TOKENS = 8192;
 
-/** API 1 回あたりの上限。応答が返らないまま処理全体が固まるのを防ぐ */
-const API_TIMEOUT_MS = 120_000;
+/**
+ * API 1 回あたりの上限。応答が返らないまま処理全体が固まるのを防ぐ。
+ * モデルのホスト先が変わってレイテンシが伸び、120 秒では足りなくなった。
+ */
+const API_TIMEOUT_MS = 240_000;
 const TOOL_TIMEOUT_MS = 60_000;
 
 /**
@@ -70,12 +73,18 @@ function applyContinuationHint(messages: ChatMessage[]): ChatMessage[] {
   return [{ ...system, content: (system.content ?? "") + CONTINUATION_HINT }, ...rest];
 }
 
+export interface ChatCompletionResult {
+  content: string | null;
+  toolCalls: ToolCall[];
+  finishReason: string;
+}
+
 export async function chatCompletion(
   messages: ChatMessage[],
   tools: ToolDefinition[],
   apiKey: string,
   baseUrl: string,
-): Promise<{ content: string | null; toolCalls: ToolCall[]; finishReason: string }> {
+): Promise<ChatCompletionResult> {
   // tools が空のときはフィールドごと省く。空配列を受け付けない API 実装があるため
   const payload = JSON.stringify({
     model: MODEL,
@@ -90,15 +99,26 @@ export async function chatCompletion(
     `[ai] chatCompletion payloadSize=${payload.length} toolsSize=${toolsSize} messagesSize=${payload.length - toolsSize} messages=${messages.length}`,
   );
 
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`,
-    },
-    body: payload,
-    signal: AbortSignal.timeout(API_TIMEOUT_MS),
-  });
+  // タイムアウトの調整には「何秒で返ってきているか」が要る。
+  // 失敗時も測っておかないと、上限に達したのか即座に弾かれたのか区別できない
+  const startedAt = Date.now();
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      },
+      body: payload,
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[ai] chatCompletion 失敗 elapsed=${Date.now() - startedAt}ms: ${message}`);
+    throw error;
+  }
+  console.log(`[ai] chatCompletion 応答 elapsed=${Date.now() - startedAt}ms status=${response.status}`);
 
   if (!response.ok) {
     const text = await response.text();
@@ -169,12 +189,25 @@ export async function executeToolCallLoop(
       );
     }
 
-    const { content, toolCalls, finishReason } = await chatCompletion(
-      messages,
-      tools,
-      apiKey,
-      baseUrl,
-    );
+    let completion: ChatCompletionResult;
+    try {
+      completion = await chatCompletion(messages, tools, apiKey, baseUrl);
+    } catch (error) {
+      // API 側の失敗でループごと落とすと、ここまでのツール往復が丸ごと消える。
+      // 集めた結果があるなら、それでまとめさせる方に倒す。
+      // この経路はツール定義を送らないため入力も軽く、通りやすい。
+      if (!messages.some((m) => m.role === "tool")) throw error;
+
+      const message = error instanceof Error ? error.message : String(error);
+      return finalizeWithoutTools(
+        messages,
+        apiKey,
+        baseUrl,
+        `API 呼び出し失敗 loop=${loop}: ${message}`,
+        "調べている途中で応答が返らなくなりました。もう一度聞いてください。",
+      );
+    }
+    const { content, toolCalls, finishReason } = completion;
 
     // 出力上限に当たったケース。ツール呼び出しが混ざっていても引数が壊れている
     // 可能性があるため実行せず、途切れたことを明示して打ち切る
