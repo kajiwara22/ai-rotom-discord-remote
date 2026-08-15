@@ -452,6 +452,37 @@ const MODE_INSTRUCTIONS: Record<UserMode, string> = {
 };
 
 /**
+ * 3 択クイズの出題形式（ADR-0011）。Web UI 専用。
+ *
+ * 選択肢を押せる形で出すには、人が読む本文とは別に機械が読める構造が要る。
+ * ブロックはサーバーが取り出して API の `quiz` に載せ、本文からは取り除く。
+ *
+ * 形式が守られなかった場合はブロックが本文として表示されるだけで、会話は止まらない。
+ */
+const QUIZ_INSTRUCTIONS = `
+
+## 3 択クイズを求められたとき
+1. 出題するポケモン・技・タイプの内容は、**必ずツールで確認してから**問題にする。
+   確認できなかったことは出題しない
+2. 一度に 5 問まとめて作る
+3. 本文には短い前置きを 1 行だけ書く。**問題文と選択肢は本文に書かない**
+   （下のブロックと二重に表示されてしまう）
+4. 前置きのあとに、次の形式のブロックをちょうど 1 つ置く
+
+\`\`\`quiz
+{"questions":[{"question":"問題文","choices":["せんたくし1","せんたくし2","せんたくし3"],"answer":1,"explanation":"1〜2文の解説"}]}
+\`\`\`
+
+- \`choices\` はちょうど 3 つにする
+- \`answer\` は正解の選択肢の番号（1 / 2 / 3）
+- \`explanation\` は答え合わせのときに出す 1〜2 文の解説
+- 正解の番号は問題ごとにばらけさせる
+- 回答の文字数の目安は、このブロックには当てはまらない
+
+クイズの成績が送られてきたら、まずほめて、間違えた問題だけ短く振り返る。
+このとき、新しいクイズを求められていなければブロックは書かない。`;
+
+/**
  * 設定画面で編集する対象のプロンプト。
  * モード指示は実行時に付与するため、ここには含めない。
  * これを含めて返すと、保存のたびにモード指示が本文へ焼き込まれて増殖する。
@@ -473,12 +504,13 @@ export function getSystemPromptForUser(userId: string): string {
     return base + DISCORD_RESTRICTIONS;
   }
 
-  // ユーザーの表示モードに応じた応答スタイル指示を付与する
+  // ユーザーの表示モードに応じた応答スタイル指示を付与する。
+  // クイズは選択肢 UI を持つ Web UI 専用のため、Discord には付けない（ADR-0011）
   const user = getUser(userId);
   if (user) {
-    return base + MODE_INSTRUCTIONS[user.mode];
+    return base + MODE_INSTRUCTIONS[user.mode] + QUIZ_INSTRUCTIONS;
   }
-  return base;
+  return base + QUIZ_INSTRUCTIONS;
 }
 
 export function setSystemPromptForUser(userId: string, promptText: string): void {

@@ -9,10 +9,12 @@ import { randomUUID } from "node:crypto";
 import type {
   AskRequest,
   AskResponse,
+  ChatMessage,
   WebAskRequest,
   WebAskResponse,
   WebResetRequest,
 } from "./types.js";
+import { extractQuiz, renderStoredReply } from "./quiz-block.js";
 import { runAsk, runAskForWeb } from "./ai-service.js";
 import {
   deleteExpiredSessions,
@@ -587,7 +589,11 @@ async function handleDiscordReset(req: IncomingMessage, res: ServerResponse): Pr
  * 新しいセッション ID がクライアントに渡らないため会話が継続しない。
  */
 function toWebAskResponse(result: { sessionId: string; reply: string }): WebAskResponse {
-  return { session_id: result.sessionId, reply: result.reply };
+  // クイズの構造は API 境界で本文から切り離す（ADR-0011）。
+  // DB には抽出前の原文が残るため、AI は自分が出した問題を覚えたままでいられる
+  const { text, quiz } = extractQuiz(result.reply);
+  if (!quiz) return { session_id: result.sessionId, reply: text };
+  return { session_id: result.sessionId, reply: text, quiz };
 }
 
 /**
@@ -788,6 +794,12 @@ async function handleSessionRename(
   }
 }
 
+/** 履歴として返す前に、クイズの構造ブロックを読める形へ置き換える（ADR-0011） */
+function renderStoredMessage(message: ChatMessage): ChatMessage {
+  if (message.role !== "assistant" || !message.content) return message;
+  return { ...message, content: renderStoredReply(message.content) };
+}
+
 async function handleSessionMessages(rawId: string, res: ServerResponse): Promise<void> {
   try {
     const sid = resolveWebSessionId(rawId);
@@ -797,7 +809,7 @@ async function handleSessionMessages(rawId: string, res: ServerResponse): Promis
       return;
     }
 
-    const messages = getSessionMessages(sid);
+    const messages = getSessionMessages(sid).map(renderStoredMessage);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(messages));
   } catch (error) {

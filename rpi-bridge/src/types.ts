@@ -1,3 +1,5 @@
+import type { QuizQuestion } from "./quiz-block.js";
+
 export interface DiscordInteraction {
   type: InteractionType;
   id: string;
@@ -127,6 +129,8 @@ export interface WebAskRequest {
 export interface WebAskResponse {
   session_id: string;
   reply: string;
+  /** 3 択クイズ（ADR-0011）。応答に含まれていたときだけ付く */
+  quiz?: QuizQuestion[];
 }
 
 export interface WebResetRequest {

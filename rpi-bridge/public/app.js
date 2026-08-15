@@ -37,6 +37,23 @@
         party: () => "パーティを みているよ",
         match: () => "たたかいの きろくを みているよ",
       },
+      // 3択クイズ（ADR-0011）。正誤判定はここで完結し、AI には問い合わせない
+      quiz: {
+        count: (i, n) => i + "もんめ / ぜんぶで " + n + "もん",
+        correct: "せいかい！",
+        wrong: "ざんねん…",
+        answerWas: (s) => "こたえは 「" + s + "」 だよ",
+        next: "つぎの もんだい",
+        again: "もういちど やる",
+        finish: "おしまい",
+        result: (c, n) => n + "もんちゅう " + c + "もん せいかい！",
+        scoreIntro: (c, n) => "クイズ おわり！ " + n + "もんちゅう " + c + "もん せいかい だったよ。",
+        scoreLine: (i, q, picked, ok, answer) =>
+          i + ". 「" + q + "」→ 「" + picked + "」 を えらんだよ（" +
+          (ok ? "せいかい" : "ちがった。こたえは 「" + answer + "」") + "）",
+        scoreAgain: "ほめて、まちがえた ところを おしえてね。そのあと つぎの 5もんを だして！",
+        scoreEnd: "ほめて、まちがえた ところを かんたんに おしえてね。",
+      },
       sec: (n) => n + "びょう",
       speak: "よみあげ", copy: "コピー",
       rename: "なまえを かえる", del: "けす",
@@ -70,6 +87,7 @@
       aiName: "ロトム",
       thinkingImg: "pikachu-dance",
       suggestions: [
+        "3たくクイズを だして！",
         "リザードンの しゅぞくち は？",
         "ピカチュウの そだてかた を おしえて",
         "みずタイプに つよい ポケモンは？",
@@ -96,6 +114,22 @@
         analyze: (x) => (x ? x + " の対面を分析中" : "対面を分析中"),
         party: () => "パーティを読み書き中",
         match: () => "対戦記録を参照中",
+      },
+      quiz: {
+        count: (i, n) => i + " 問目 / 全 " + n + " 問",
+        correct: "正解！",
+        wrong: "不正解",
+        answerWas: (s) => "正解は「" + s + "」",
+        next: "次の問題",
+        again: "もう一度",
+        finish: "終了",
+        result: (c, n) => n + " 問中 " + c + " 問正解",
+        scoreIntro: (c, n) => "クイズ終了。" + n + " 問中 " + c + " 問正解でした。",
+        scoreLine: (i, q, picked, ok, answer) =>
+          i + ". 「" + q + "」→ 「" + picked + "」を選択（" +
+          (ok ? "正解" : "不正解。正解は「" + answer + "」") + "）",
+        scoreAgain: "簡単に振り返ってから、次の 5 問を出してください。",
+        scoreEnd: "間違えた問題だけ簡単に解説してください。",
       },
       sec: (n) => n + "秒",
       speak: "読み上げ", copy: "コピー",
@@ -130,6 +164,7 @@
       aiName: "ロトム",
       thinkingImg: "ball",
       suggestions: [
+        "3択クイズを出して",
         "リザードンの種族値は？",
         "カメックスのSP調整を教えて",
         "水タイプに強いポケモンは？",
@@ -165,6 +200,12 @@
   let timer = null;
   /** 送信中の AbortController。中止ボタンが使う */
   let currentAbort = null;
+  /**
+   * 進行中の 3 択クイズ（ADR-0011）。
+   * { questions, index, results } を持つ。サーバーは状態を持たないため、
+   * リロードすればクイズは終わる。
+   */
+  let quiz = null;
 
   const t = () => L[currentUser ? currentUser.mode : "kids"];
 
@@ -574,6 +615,149 @@
     });
   }
 
+  /* ---------- 3択クイズ（ADR-0011） ---------- */
+  /** 5 問まとめて受け取り、1 問ずつ出す。以降 AI への往復は発生しない */
+  function startQuiz(questions) {
+    quiz = { questions: questions, index: 0, results: [] };
+    renderQuestion();
+  }
+
+  /**
+   * 進行中のクイズを畳む。押しかけのボタンを画面に残さない。
+   * 過去ログから読み込んだカードは元々ボタンを持たないため対象外。
+   */
+  function closeQuiz() {
+    quiz = null;
+    els.inner.querySelectorAll(".quizcard .quiz-actions").forEach((el) => el.remove());
+    els.inner.querySelectorAll(".quiz-choice").forEach((b) => { b.disabled = true; });
+  }
+
+  function renderQuizActions(card, actions) {
+    const wrap = card.querySelector(".quiz-actions");
+    wrap.innerHTML = "";
+    actions.forEach((a) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "quiz-act" + (a.ghost ? " ghost" : "");
+      b.textContent = a.label;
+      b.addEventListener("click", a.act);
+      wrap.appendChild(b);
+    });
+  }
+
+  function renderQuestion() {
+    const d = t().quiz;
+    const q = quiz.questions[quiz.index];
+
+    const card = document.createElement("div");
+    card.className = "quizcard";
+    card.innerHTML =
+      '<div class="quiz-head"></div><div class="quiz-q"></div>' +
+      '<div class="quiz-choices"></div><div class="quiz-feedback"></div>' +
+      '<div class="quiz-actions"></div>';
+    card.querySelector(".quiz-head").textContent = d.count(quiz.index + 1, quiz.questions.length);
+    card.querySelector(".quiz-q").textContent = q.question;
+
+    const choices = card.querySelector(".quiz-choices");
+    q.choices.forEach((text, i) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "quiz-choice";
+      b.innerHTML = '<span class="num"></span><span class="tx"></span>';
+      b.querySelector(".num").textContent = String(i + 1);
+      b.querySelector(".tx").textContent = text;
+      b.addEventListener("click", () => answerQuestion(card, i));
+      choices.appendChild(b);
+    });
+
+    // 1 問目から「おしまい」を出す。やめる操作は常に手元にある
+    renderQuizActions(card, [{ label: d.finish, ghost: true, act: () => finishQuiz(false) }]);
+
+    els.inner.appendChild(card);
+    scrollBottom();
+  }
+
+  /**
+   * 正誤はここで確定させる。AI に判定させると、自分が出した正解を取り違えて
+   * 「正解なのに不正解」と言うことがある（ADR-0011）。
+   */
+  function answerQuestion(card, picked) {
+    if (!quiz) return;
+    const d = t().quiz;
+    const q = quiz.questions[quiz.index];
+    const ok = picked === q.answer_index;
+
+    quiz.results.push({
+      question: q.question,
+      picked: q.choices[picked],
+      answer: q.choices[q.answer_index],
+      ok: ok,
+    });
+
+    card.querySelectorAll(".quiz-choice").forEach((b, i) => {
+      b.disabled = true;
+      if (i === q.answer_index) b.classList.add("correct");
+      else if (i === picked) b.classList.add("wrong");
+    });
+
+    const fb = card.querySelector(".quiz-feedback");
+    fb.className = "quiz-feedback on " + (ok ? "ok" : "ng");
+    fb.innerHTML = '<div class="fb-head"></div><div class="fb-body"></div>';
+    fb.querySelector(".fb-head").textContent =
+      ok ? d.correct : d.wrong + " " + d.answerWas(q.choices[q.answer_index]);
+    fb.querySelector(".fb-body").textContent = q.explanation || "";
+
+    if (quiz.index + 1 < quiz.questions.length) {
+      renderQuizActions(card, [
+        {
+          label: d.next,
+          act: () => {
+            quiz.index += 1;
+            card.querySelector(".quiz-actions").remove();
+            renderQuestion();
+          },
+        },
+        { label: d.finish, ghost: true, act: () => finishQuiz(false) },
+      ]);
+    } else {
+      const result = document.createElement("div");
+      result.className = "quiz-result";
+      result.textContent = d.result(quiz.results.filter((r) => r.ok).length, quiz.results.length);
+      card.insertBefore(result, card.querySelector(".quiz-actions"));
+      renderQuizActions(card, [
+        { label: d.again, act: () => finishQuiz(true) },
+        { label: d.finish, ghost: true, act: () => finishQuiz(false) },
+      ]);
+    }
+    scrollBottom();
+  }
+
+  /**
+   * クイズを終え、成績をまとめて 1 回だけ送る。
+   * 1 問ごとに送るとテンポが壊れるため、振り返りは最後にまとめる（ADR-0011）。
+   *
+   * @param again 続けて次の 5 問を出してもらうか
+   */
+  function finishQuiz(again) {
+    if (!quiz) return;
+    const d = t().quiz;
+    const results = quiz.results;
+    closeQuiz();
+
+    // 1 問も答えずにやめたときは、振り返らせるものがない
+    if (results.length === 0) return;
+
+    const correct = results.filter((r) => r.ok).length;
+    const text = [
+      d.scoreIntro(correct, results.length),
+      results.map((r, i) => d.scoreLine(i + 1, r.question, r.picked, r.ok, r.answer)).join("\n"),
+      again ? d.scoreAgain : d.scoreEnd,
+    ].join("\n");
+
+    // 「おしまい」を選んだのに次のクイズが始まると、終了の操作が意味を失う
+    send({ text: text, acceptQuiz: again });
+  }
+
   /* ---------- 送信 ---------- */
   function autoGrow() {
     els.input.style.height = "auto";
@@ -630,8 +814,14 @@
     }
   }
 
-  async function send() {
-    const text = els.input.value.trim();
+  /**
+   * @param options.text 入力欄の代わりに送る文字列（クイズの成績など）
+   * @param options.acceptQuiz 応答に含まれるクイズを開始するか（既定 true）
+   */
+  async function send(options) {
+    const opts = options || {};
+    const fromInput = opts.text === undefined;
+    const text = (fromInput ? els.input.value : opts.text).trim();
     if (!text || sending || !currentUser) return;
     const d = t();
 
@@ -639,9 +829,14 @@
     const empty = els.inner.querySelector(".empty");
     if (empty) empty.remove();
 
+    // 別の話が始まったら、答えかけの問題は畳む（押せる問題は最新の 1 問だけ）
+    if (fromInput) closeQuiz();
+
     appendMessage("user", text);
-    els.input.value = "";
-    autoGrow();
+    if (fromInput) {
+      els.input.value = "";
+      autoGrow();
+    }
     scrollBottom();
 
     sending = true;
@@ -698,7 +893,15 @@
       if (!data) throw new Error(d.errTitle);
 
       if (data.session_id) currentSessionId = data.session_id;
-      appendMessage("assistant", data.reply || "（回答がありませんでした）");
+
+      const reply = String(data.reply || "");
+      const hasQuiz =
+        opts.acceptQuiz !== false && Array.isArray(data.quiz) && data.quiz.length > 0;
+      // 前置きなしでクイズだけ返ってきたときに、空の吹き出しを出さない
+      if (reply.trim() || !hasQuiz) {
+        appendMessage("assistant", reply || "（回答がありませんでした）");
+      }
+      if (hasQuiz) startQuiz(data.quiz);
       scrollBottom();
       await loadSessions();
     } catch (e) {

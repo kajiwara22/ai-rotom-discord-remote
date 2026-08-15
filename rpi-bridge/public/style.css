@@ -351,6 +351,80 @@ button { font: inherit; color: inherit; }
   border-radius: 999px; font-weight: 700; cursor: pointer; white-space: nowrap;
 }
 
+/* ---------- 3択クイズ（ADR-0011） ---------- */
+/* 左端を AI の吹き出しに揃える。アバターは持たない */
+.quizcard {
+  max-width: min(100%, 700px);
+  margin: 0 0 18px calc(var(--avatar) + 10px);
+  padding: 14px 16px;
+  background: var(--panel-bg);
+  border: 2px solid var(--rotom-cyan);
+  border-radius: var(--radius-lg);
+}
+:root[data-mode="junior"] .quizcard {
+  border-width: 1px; border-color: var(--line);
+  margin-bottom: 12px; padding: 12px 14px;
+}
+.quiz-head { font-size: .78rem; color: var(--text-mute); font-weight: 700; }
+.quiz-q { font-size: 1.05rem; font-weight: 700; line-height: 1.5; margin: 6px 0 12px; }
+:root[data-mode="junior"] .quiz-q { font-size: 1rem; font-weight: 600; margin: 4px 0 10px; }
+
+.quiz-choices { display: flex; flex-direction: column; gap: 10px; }
+:root[data-mode="junior"] .quiz-choices { gap: 6px; }
+.quiz-choice {
+  display: flex; align-items: center; gap: 12px;
+  min-height: var(--tap); padding: 8px 14px;
+  background: var(--screen-bg);
+  border: 2px solid var(--line); border-radius: var(--radius);
+  text-align: left; font-size: 1rem; cursor: pointer;
+}
+:root[data-mode="junior"] .quiz-choice { border-width: 1px; gap: 10px; font-size: .92rem; }
+.quiz-choice:hover:not(:disabled) { border-color: var(--rotom-cyan); background: rgba(41,182,224,.12); }
+.quiz-choice:active:not(:disabled) { transform: translateY(1px); }
+.quiz-choice .num {
+  flex: 0 0 auto; width: 28px; height: 28px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--rotom-cyan); color: #fff; font-size: .9rem; font-weight: 700;
+}
+:root[data-mode="junior"] .quiz-choice .num { width: 22px; height: 22px; font-size: .78rem; }
+.quiz-choice .tx { min-width: 0; }
+.quiz-choice:disabled { cursor: default; opacity: .6; }
+/* 答え合わせ。正解は必ず示し、× を付けるのは選んだ誤答だけ */
+.quiz-choice.correct { opacity: 1; border-color: #2E9E5B; background: rgba(46,158,91,.16); }
+.quiz-choice.correct .num { background: #2E9E5B; }
+.quiz-choice.wrong { opacity: 1; border-color: var(--danger); background: rgba(217,48,37,.12); }
+.quiz-choice.wrong .num { background: var(--danger); }
+
+.quiz-feedback { display: none; margin-top: 12px; padding: 10px 12px; border-radius: var(--radius); }
+.quiz-feedback.on { display: block; }
+.quiz-feedback.ok { background: rgba(46,158,91,.14); }
+.quiz-feedback.ng { background: rgba(217,48,37,.10); }
+.quiz-feedback .fb-head { font-weight: 700; }
+.quiz-feedback .fb-body { margin-top: 4px; font-size: .9rem; line-height: 1.6; }
+.quiz-feedback .fb-body:empty { display: none; }
+
+.quiz-result {
+  margin-top: 14px; text-align: center;
+  font-size: 1.15rem; font-weight: 700; color: var(--rotom-orange);
+}
+:root[data-mode="junior"] .quiz-result { font-size: 1rem; }
+
+.quiz-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+.quiz-actions:empty { display: none; }
+.quiz-act {
+  min-height: 44px; padding: 0 18px;
+  background: var(--rotom-cyan); color: #fff;
+  border: none; border-radius: 999px; font-weight: 700; cursor: pointer;
+}
+:root[data-mode="junior"] .quiz-act {
+  min-height: 36px; padding: 0 14px;
+  font-size: .88rem; font-weight: 600; border-radius: var(--radius);
+}
+.quiz-act:active { transform: translateY(1px); }
+.quiz-act.ghost { background: transparent; color: var(--text-mute); border: 2px solid var(--line); }
+:root[data-mode="junior"] .quiz-act.ghost { border-width: 1px; }
+.quiz-act.ghost:hover { color: var(--text); border-color: var(--rotom-cyan); }
+
 .empty {
   height: 100%; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 14px;
