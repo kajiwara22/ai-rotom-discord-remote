@@ -558,6 +558,44 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       },
     },
   },
+
+  // 対戦記録（自分が撮影・解析した実戦の記録。docs/adr/ADR-0010.md）
+  {
+    type: "function",
+    function: {
+      name: "list_matches",
+      description:
+        "自分が投稿した対戦動画に含まれる対戦の一覧を取得する。1つの動画に複数の対戦が入っているため、振り返りたい対戦を選ぶために最初に呼ぶ。各対戦の matchId・勝敗・相手の先発が分かる。",
+      parameters: {
+        type: "object",
+        properties: {
+          video: {
+            type: "string",
+            description: "YouTube の URL または 11 文字の動画 ID。どちらの形式でもよい",
+          },
+        },
+        required: ["video"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_match",
+      description:
+        "1つの対戦の記録を取得する。相手の構築6体・相手の先発2体・自分の先発と選出4体・勝敗・動画の該当位置が分かる。技やダメージなどの行動ログは記録されていないため、選出や構築相性の振り返りに使うこと。自分の控え2体を含めて考えるには、保存済みパーティ（load_party）を併せて参照する。",
+      parameters: {
+        type: "object",
+        properties: {
+          matchId: {
+            type: "string",
+            description: "list_matches が返した matchId",
+          },
+        },
+        required: ["matchId"],
+      },
+    },
+  },
 ];
 
 export const DISCORD_RESTRICTIONS = `

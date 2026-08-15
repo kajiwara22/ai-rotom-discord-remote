@@ -35,6 +35,11 @@ import {
   verifyParentPin,
 } from "./conversation-manager.js";
 import { closeDb } from "./db.js";
+import {
+  isMatchTool,
+  executeMatchTool,
+  closeMatchRepository,
+} from "./match-repository.js";
 
 const PORT = parseInt(process.env.PORT ?? "3210", 10);
 const HOST = process.env.HOST ?? "127.0.0.1";
@@ -404,6 +409,7 @@ async function main(): Promise<void> {
     console.log("\nシャットダウン中...");
     clearInterval(cleanupInterval);
     try { closeDb(); } catch { /* ignore */ }
+    try { await closeMatchRepository(); } catch { /* ignore */ }
     try { await client.close(); } catch { /* ignore */ }
     process.exit(0);
   };
@@ -481,6 +487,20 @@ async function handleToolCall(
     const args = JSON.parse(body);
 
     console.log(`ツール実行: ${toolName}`, JSON.stringify(args).substring(0, 200));
+
+    // 対戦記録は MCP ではなく Pi 側の Parquet 参照で処理する（ADR-0010）。
+    // 応答は MCP と同じ形にそろえ、呼び出し側の分岐を増やさない
+    if (isMatchTool(toolName)) {
+      const text = await executeMatchTool(toolName, args);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          success: true,
+          result: { content: [{ type: "text", text }] },
+        }),
+      );
+      return;
+    }
 
     const result = await client.callTool({
       name: toolName,

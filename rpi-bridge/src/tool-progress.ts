@@ -8,7 +8,13 @@
  */
 
 /** 進捗の種別。クライアントはこれをキーに文言を引く */
-export type ToolProgressKind = "lookup" | "search" | "calculate" | "analyze" | "party";
+export type ToolProgressKind =
+  | "lookup"
+  | "search"
+  | "calculate"
+  | "analyze"
+  | "party"
+  | "match";
 
 export interface ToolProgress {
   kind: ToolProgressKind;
@@ -26,8 +32,12 @@ const PARTY_TOOLS = new Set([
   "import_party_from_text",
 ]);
 
+/** 対戦記録ツール。`list_` / `get_` の接頭辞で分類すると別の種別に落ちるため先に見る */
+const MATCH_TOOLS = new Set(["list_matches", "get_match"]);
+
 function kindOf(toolName: string): ToolProgressKind {
   if (PARTY_TOOLS.has(toolName)) return "party";
+  if (MATCH_TOOLS.has(toolName)) return "match";
   if (toolName.startsWith("calculate_")) return "calculate";
   if (toolName.startsWith("search_")) return "search";
   if (toolName.startsWith("get_")) return "lookup";

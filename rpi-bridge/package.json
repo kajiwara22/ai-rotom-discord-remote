@@ -6,9 +6,11 @@
   "scripts": {
     "start": "node --import tsx src/index.ts",
     "dev": "node --import tsx --watch src/index.ts",
-    "dev:inspect": "node --inspect=0.0.0.0:9229 --import tsx src/index.ts"
+    "dev:inspect": "node --inspect=0.0.0.0:9229 --import tsx src/index.ts",
+    "setup:duckdb": "node --import tsx src/setup-duckdb.ts"
   },
   "dependencies": {
+    "@duckdb/node-api": "1.5.5-r.4",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@nonz250/ai-rotom": "^1.2.0",
     "better-sqlite3": "^13.0.1"

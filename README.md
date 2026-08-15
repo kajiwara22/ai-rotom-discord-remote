@@ -186,9 +186,35 @@ cp .env.example .env
 # .env を編集（特に OPENCODE_GO_API_KEY を設定）
 
 pnpm install
+pnpm setup:duckdb # 対戦記録を使う場合のみ。初回だけ実行する（後述）
 pnpm dev          # 通常起動
 pnpm dev:inspect  # VS Code リモートデバッグ用 (port 9229)
 ```
+
+#### 対戦記録の参照設定（初回のみ）
+
+対戦の振り返り機能は、`pokemon-champions-chapter` が R2 に置いた Parquet を
+DuckDB の httpfs 拡張で直接読みます（[ADR-0010](docs/adr/ADR-0010.md)）。
+
+拡張の取得は**サーバー起動時ではなくセットアップ時に済ませます**。
+ネットワークが不調な再起動で、サーバー全体の起動が拡張のダウンロードに
+引きずられるのを避けるためです。
+
+```bash
+pnpm setup:duckdb
+```
+
+httpfs 拡張のインストールと、R2 への疎通確認（件数の取得）までを行います。
+先に `.env` の `R2_ENDPOINT_URL` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` を
+設定しておいてください。R2 の認証情報は `pokemon-champions-chapter` の
+`fetch_parquet.sh` が使っているものと同じです。
+
+このコマンドを実行しなくても**サーバーは起動します**。使えなくなるのは対戦の
+振り返りだけで、他の機能には影響しません。
+
+> 前提: `@duckdb/node-api` はビルド済みバイナリを使うため、64bit OS が必要です。
+> `uname -m` が `aarch64` を返すことを確認してください（32bit の `armv7l` では
+> 動作しません）。
 
 デフォルトで `http://127.0.0.1:3210` で起動します。
 
@@ -303,6 +329,11 @@ npx wrangler secret put ALLOWED_CHANNEL_IDS
 | `BRIDGE_URL` | ツール実行用内部 URL | `http://127.0.0.1:3210` |
 | `PARENT_PIN` | Web UI 保護者設定の初期 PIN（数字4桁） | `1234` |
 | `WEB_SESSION_TTL_DAYS` | Web チャット履歴の保持日数（Discord は 30分固定） | `30` |
+| `R2_ENDPOINT_URL` | 対戦記録を置いた R2 のエンドポイント（`https://` の有無は問わない） | (未設定なら振り返り機能のみ無効) |
+| `R2_ACCESS_KEY_ID` | R2 のアクセスキー ID | 同上 |
+| `R2_SECRET_ACCESS_KEY` | R2 のシークレットアクセスキー | 同上 |
+| `R2_BUCKET_NAME` | 対戦記録のバケット名 | `pcc-data` |
+| `PCC_PARQUET_KEY` | 対戦記録のオブジェクトキー | `index/matches.parquet` |
 
 ### 7. 動作確認
 
