@@ -565,13 +565,14 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     function: {
       name: "list_matches",
       description:
-        "自分が投稿した対戦動画に含まれる対戦の一覧を取得する。1つの動画に複数の対戦が入っているため、振り返りたい対戦を選ぶために最初に呼ぶ。各対戦の matchId・勝敗・相手の先発が分かる。",
+        "自分が投稿した対戦動画に含まれる対戦の一覧を取得する。1つの動画に複数の対戦が入っているため、振り返りたい対戦を選ぶために最初に呼ぶ。各対戦の matchId・勝敗・相手の先発が分かる。URL に再生位置（t=）が含まれていれば、その位置の対戦を matchAtTimestamp として示す。",
       parameters: {
         type: "object",
         properties: {
           video: {
             type: "string",
-            description: "YouTube の URL または 11 文字の動画 ID。どちらの形式でもよい",
+            description:
+              "YouTube の URL または 11 文字の動画 ID。URL は再生位置（t=）を含めたまま、利用者が貼ったとおりに渡すこと",
           },
         },
         required: ["video"],

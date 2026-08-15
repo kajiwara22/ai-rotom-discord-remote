@@ -54,6 +54,29 @@ export function normalizeVideoId(input: string): string | undefined {
   return matched ? matched[1] : undefined;
 }
 
+/**
+ * URL の再生位置を秒で取り出す。
+ *
+ * 動画を見ている途中で共有リンクをコピーすると `t=` が付く。これは「どの対戦か」を
+ * 指す最も確かな手がかりなので、捨てずに拾う。`1311` `1311s` `21m51s` のいずれの
+ * 書き方でも来るため、まとめて解釈する。
+ */
+export function extractTimestampSec(input: string): number | undefined {
+  const matched = input.match(/[?&](?:t|start)=([^&\s]+)/);
+  if (matched === null) return undefined;
+
+  const raw = matched[1];
+  if (/^\d+s?$/.test(raw)) return Number(raw.replace(/s$/, ""));
+
+  const hms = raw.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/);
+  if (hms === null) return undefined;
+  const [, hours, minutes, seconds] = hms;
+  if (hours === undefined && minutes === undefined && seconds === undefined) {
+    return undefined;
+  }
+  return Number(hours ?? 0) * 3600 + Number(minutes ?? 0) * 60 + Number(seconds ?? 0);
+}
+
 /** SQL リテラルに埋める文字列をエスケープする */
 function quote(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
@@ -142,6 +165,17 @@ function watchUrl(videoId: string, startSec: number): string {
   return `https://youtu.be/${videoId}?t=${startSec}`;
 }
 
+/**
+ * その再生位置に進行中だった対戦を探す。
+ * 最終戦は `endSec` を持たないため、開始位置以降であれば該当とみなす。
+ */
+function findMatchAt(rows: MatchRow[], timestampSec: number): MatchRow | undefined {
+  return rows.find(
+    (row) =>
+      row.startSec <= timestampSec && (row.endSec === null || timestampSec < row.endSec),
+  );
+}
+
 /** 空配列は「記録がない」ことを意味するため、値がある場合だけ返す */
 function presentOrUndefined(list: string[] | undefined): string[] | undefined {
   return list !== undefined && list.length > 0 ? list : undefined;
@@ -163,7 +197,7 @@ export async function listMatches(video: string): Promise<unknown> {
   }
 
   const rows = await query(
-    `SELECT matchId, title, result, startSec, opponentLead, videoTitle, publishedAt
+    `SELECT matchId, title, result, startSec, endSec, opponentLead, videoTitle, publishedAt
      FROM ${SOURCE}
      WHERE videoId = $1
      ORDER BY startSec`,
@@ -177,10 +211,26 @@ export async function listMatches(video: string): Promise<unknown> {
     };
   }
 
+  // 動画を見ながら貼られたリンクは、再生位置がそのまま「どの対戦か」を指す
+  const timestampSec = extractTimestampSec(video);
+  const matchAtTimestamp =
+    timestampSec === undefined ? undefined : findMatchAt(rows, timestampSec);
+
+  const notes = ["振り返りたい対戦を選び、matchId を指定して get_match を呼ぶ"];
+  if (matchAtTimestamp !== undefined) {
+    notes.push(
+      `URL の再生位置（${timestampSec} 秒）は matchAtTimestamp の対戦を指している。` +
+        "利用者が言葉で別の対戦を指定していて食い違う場合は、どちらを振り返るか確認すること",
+    );
+  } else if (timestampSec !== undefined) {
+    notes.push(`URL の再生位置（${timestampSec} 秒）に対応する対戦はない`);
+  }
+
   return {
     videoId,
     videoTitle: rows[0].videoTitle,
     publishedAt: rows[0].publishedAt,
+    matchAtTimestamp: matchAtTimestamp?.matchId,
     matches: rows.map((row) => ({
       matchId: row.matchId,
       title: row.title,
@@ -188,7 +238,7 @@ export async function listMatches(video: string): Promise<unknown> {
       opponentLead: row.opponentLead,
       url: watchUrl(videoId, row.startSec),
     })),
-    notes: "振り返りたい対戦を選び、matchId を指定して get_match を呼ぶ",
+    notes,
   };
 }
 
@@ -213,7 +263,7 @@ export async function getMatch(matchId: string): Promise<unknown> {
   const row = rows[0];
   const notes = [
     "この記録に技・ダメージ・ターン推移は含まれない。選出フェーズまでを扱うこと",
-    "selfSelection は選出した 4 体。控えの 2 体は記録されていないため、必要なら保存済みパーティを参照すること",
+    "selfSelection は選出した 4 体。パーティ 6 体のうち選出しなかった 2 体は記録されていないため、必要なら保存済みパーティを参照すること",
   ];
   if (presentOrUndefined(row.opponentSelection) === undefined) {
     notes.push("相手の選出 4 体は未記録。相手について分かるのは構築 6 体と先発 2 体のみ");
