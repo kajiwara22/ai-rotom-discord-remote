@@ -32,11 +32,22 @@
 
 	# SSE（AI 応答の進捗配信）は圧縮の対象から外す。
 	# 圧縮を挟むとイベントがバッファに溜まり、待機中の進捗が届かなくなる。
+	#
+	# レスポンスマッチャは status と header しか使えず、「text/event-stream 以外」
+	# という否定は書けない（not はリクエストマッチャ専用）。既定の match が含む
+	# text/* が text/event-stream まで拾ってしまうため、圧縮したい型を列挙する。
+	# ブロック内の複数行は OR。
 	encode {
 		zstd
 		gzip
 		match {
-			not header Content-Type text/event-stream*
+			header Content-Type text/html*
+			header Content-Type text/css*
+			header Content-Type text/javascript*
+			header Content-Type text/plain*
+			header Content-Type application/json*
+			header Content-Type application/javascript*
+			header Content-Type image/svg+xml*
 		}
 	}
 
