@@ -1,8 +1,19 @@
 import Database from "better-sqlite3";
 import path from "node:path";
 import fs from "node:fs";
+import os from "node:os";
 
-const DEFAULT_DB_PATH = "/tmp/rotom-conversations.db";
+/**
+ * SQLite の既定の置き場所。
+ * `/tmp` は tmpfs なら再起動で消え、実ディスクでも systemd-tmpfiles により
+ * 10日でクリーンアップされるため、会話履歴の保存先としては使えない。
+ * XDG のデータディレクトリ（既定 ~/.local/share）配下に永続化する。
+ */
+const DEFAULT_DB_PATH = path.join(
+  process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local", "share"),
+  "rotom",
+  "conversations.db",
+);
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 

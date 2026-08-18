@@ -323,7 +323,7 @@ npx wrangler secret put ALLOWED_CHANNEL_IDS
 |---|---|---|
 | `PORT` | サーバーポート | `3210` |
 | `BIND_HOST` | バインドアドレス（Caddy 経由なら `127.0.0.1` のまま） | `127.0.0.1` |
-| `DATABASE_PATH` | SQLite ファイルパス | `/tmp/rotom-conversations.db` |
+| `DATABASE_PATH` | SQLite ファイルパス（`/tmp` 配下は再起動や systemd のクリーンアップで消えるため指定しない） | `~/.local/share/rotom/conversations.db` |
 | `OPENCODE_GO_API_KEY` | OpenCode Go API キー | **(必須)** |
 | `OPENCODE_GO_BASE_URL` | API ベース URL | `https://opencode.ai/zen/go/v1` |
 | `BRIDGE_URL` | ツール実行用内部 URL | `http://127.0.0.1:3210` |

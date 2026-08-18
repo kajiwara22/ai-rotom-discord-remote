@@ -54,7 +54,7 @@ BOT トークンや CF-Access 認証情報を含む。本番では `wrangler sec
 
 ### rpi-bridge/ (.env.example)
 - `OPENCODE_GO_API_KEY`, `OPENCODE_GO_BASE_URL` — OpenCode Go API の認証情報
-- `DATABASE_PATH` — デフォルト `/tmp/rotom-conversations.db`
+- `DATABASE_PATH` — デフォルト `~/.local/share/rotom/conversations.db`（`/tmp` は再起動や systemd のクリーンアップで消えるため使わない）
 - `BRIDGE_URL` — MCP Bridge 自身の URL（ツール外部公開用）
 
 ## アーキテクチャ上の制約
