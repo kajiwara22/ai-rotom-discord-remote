@@ -8,6 +8,10 @@
  *
  * このデータに行動ログ（技・ダメージ・ターン推移）は含まれない。
  * 扱えるのは選出フェーズまでであり、その制約は応答の notes で AI に伝える。
+ *
+ * 解析側が自分のパーティ名（selfPartySlug）と 6 体構成（selfTeam）を Parquet に
+ * 埋め込むようになった（docs/adr/ADR-0012.md）。get_match / list_matches がそれらを
+ * 返し、get_party_from_matches がパーティ単位の照会を担う。
  */
 import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
 
@@ -39,6 +43,16 @@ interface MatchRow {
   opponentSelection: string[];
   selfLead: string[];
   selfSelection: string[];
+  selfTeam: string[];
+  selfPartySlug: string | null;
+}
+
+/** パーティごとの集計行（get_party_from_matches の一覧用） */
+interface PartyAggRow {
+  selfPartySlug: string;
+  total: number | string;
+  win: number | string;
+  lose: number | string;
 }
 
 /**
@@ -151,10 +165,10 @@ function getConnection(): Promise<DuckDBConnection> {
   return connectionPromise;
 }
 
-async function query(sql: string, values: string[]): Promise<MatchRow[]> {
+async function query<T = MatchRow>(sql: string, values: string[]): Promise<T[]> {
   const connection = await getConnection();
   const reader = await connection.runAndReadAll(sql, values);
-  return reader.getRowObjectsJson() as unknown as MatchRow[];
+  return reader.getRowObjectsJson() as unknown as T[];
 }
 
 /** Parquet の場所。利用者の入力は含まれないため、そのまま SQL に埋める */
@@ -197,7 +211,7 @@ export async function listMatches(video: string): Promise<unknown> {
   }
 
   const rows = await query(
-    `SELECT matchId, title, result, startSec, endSec, opponentLead, videoTitle, publishedAt
+    `SELECT matchId, title, result, startSec, endSec, opponentLead, videoTitle, publishedAt, selfPartySlug
      FROM ${SOURCE}
      WHERE videoId = $1
      ORDER BY startSec`,
@@ -236,6 +250,7 @@ export async function listMatches(video: string): Promise<unknown> {
       title: row.title,
       result: row.result,
       opponentLead: row.opponentLead,
+      party: row.selfPartySlug ?? undefined,
       url: watchUrl(videoId, row.startSec),
     })),
     notes,
@@ -263,7 +278,7 @@ export async function getMatch(matchId: string): Promise<unknown> {
   const row = rows[0];
   const notes = [
     "この記録に技・ダメージ・ターン推移は含まれない。選出フェーズまでを扱うこと",
-    "selfSelection は選出した 4 体。パーティ 6 体のうち選出しなかった 2 体は記録されていないため、必要なら保存済みパーティを参照すること",
+    "team はこの対戦で使ったパーティ 6 体、party はそのパーティ名。持ち物・技・努力値まで見るなら、保存済みパーティ（load_party）に party を渡して取得すること",
   ];
   if (presentOrUndefined(row.opponentSelection) === undefined) {
     notes.push("相手の選出 4 体は未記録。相手について分かるのは構築 6 体と先発 2 体のみ");
@@ -282,7 +297,100 @@ export async function getMatch(matchId: string): Promise<unknown> {
     opponentSelection: presentOrUndefined(row.opponentSelection),
     selfLead: row.selfLead,
     selfSelection: row.selfSelection,
+    party: row.selfPartySlug ?? undefined,
+    team: presentOrUndefined(row.selfTeam),
     notes,
+  };
+}
+
+/**
+ * 記録に登場するパーティの一覧（get_party_from_matches の name 省略時）。
+ *
+ * パーティ名は名前空間を持たない。この記録は自分のものであり、
+ * 名前は表示名のまま AI と利用者に見せる（ADR-0009 の付け替え対象ではない）。
+ */
+async function listParties(): Promise<unknown> {
+  const rows = await query<PartyAggRow>(
+    `SELECT selfPartySlug,
+            count(*) AS total,
+            count(*) FILTER (WHERE result = 'win') AS win,
+            count(*) FILTER (WHERE result = 'lose') AS lose
+     FROM ${SOURCE}
+     WHERE selfPartySlug IS NOT NULL
+     GROUP BY selfPartySlug
+     ORDER BY total DESC
+     LIMIT 50`,
+    [],
+  );
+
+  if (rows.length === 0) {
+    return { success: false, error: "対戦記録にパーティ情報はまだ記録されていません" };
+  }
+
+  return {
+    success: true,
+    parties: rows.map((row) => {
+      const total = Number(row.total);
+      const win = Number(row.win);
+      const lose = Number(row.lose);
+      return {
+        name: row.selfPartySlug,
+        record: { total, win, lose, unknown: total - win - lose },
+      };
+    }),
+    notes: ["name を指定して get_party_from_matches を呼ぶと、6 体構成と直近の対戦が分かる"],
+  };
+}
+
+/**
+ * パーティの情報を対戦記録から取得する。
+ *
+ * name 省略時は記録に登場するパーティの一覧を返す。指定時はそのパーティの
+ * 6 体構成と、使われた直近 10 戦を返す。
+ *
+ * 直近 10 戦の上限は実測に基づく（56 戦全部を返すと 6,553 文字で素通しの上限を
+ * 超える。docs/adr/ADR-0012.md）。上限を変えるときは測り直すこと（ADR-0006）。
+ */
+export async function getPartyFromMatches(name?: string): Promise<unknown> {
+  if (name === undefined || name.trim() === "") {
+    return listParties();
+  }
+  const trimmed = name.trim();
+
+  const rows = await query(
+    `SELECT matchId, videoId, title, result, startSec, endSec, opponentLead, selfTeam, selfPartySlug, publishedAt
+     FROM ${SOURCE}
+     WHERE selfPartySlug = $1
+     ORDER BY publishedAt DESC, startSec DESC`,
+    [trimmed],
+  );
+  if (rows.length === 0) {
+    return {
+      success: false,
+      error: `このパーティ名の対戦記録は見つかりませんでした（party: ${trimmed}）。パーティ名は list_matches / get_match の party フィールドで確認できます。`,
+    };
+  }
+
+  const total = rows.length;
+  const win = rows.filter((r) => r.result === "win").length;
+  const lose = rows.filter((r) => r.result === "lose").length;
+
+  return {
+    success: true,
+    name: rows[0].selfPartySlug,
+    team: presentOrUndefined(rows[0].selfTeam),
+    record: { total, win, lose, unknown: total - win - lose },
+    matches: rows.slice(0, 10).map((row) => ({
+      matchId: row.matchId,
+      title: row.title,
+      result: row.result,
+      opponentLead: row.opponentLead,
+      url: watchUrl(row.videoId, row.startSec),
+    })),
+    notes: [
+      `全 ${total} 戦中、直近 10 戦を表示`,
+      "この記録に技・ダメージ・ターン推移は含まれない。選出フェーズまでを扱うこと",
+    ],
   };
 }
 
@@ -299,7 +407,11 @@ export async function countMatches(): Promise<number> {
 
 /** 対戦記録ツールかどうか。MCP ではなくこのモジュールが処理する */
 export function isMatchTool(toolName: string): boolean {
-  return toolName === "list_matches" || toolName === "get_match";
+  return (
+    toolName === "list_matches" ||
+    toolName === "get_match" ||
+    toolName === "get_party_from_matches"
+  );
 }
 
 /**
@@ -319,6 +431,14 @@ export async function executeMatchTool(
         return JSON.stringify({ success: false, error: "video を指定してください" });
       }
       return JSON.stringify(await listMatches(video));
+    }
+
+    if (toolName === "get_party_from_matches") {
+      const name = args.name;
+      if (name !== undefined && typeof name !== "string") {
+        return JSON.stringify({ success: false, error: "name は文字列で指定してください" });
+      }
+      return JSON.stringify(await getPartyFromMatches(name));
     }
 
     const matchId = args.matchId;

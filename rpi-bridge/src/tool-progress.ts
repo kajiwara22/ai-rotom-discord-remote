@@ -33,7 +33,7 @@ const PARTY_TOOLS = new Set([
 ]);
 
 /** 対戦記録ツール。`list_` / `get_` の接頭辞で分類すると別の種別に落ちるため先に見る */
-const MATCH_TOOLS = new Set(["list_matches", "get_match"]);
+const MATCH_TOOLS = new Set(["list_matches", "get_match", "get_party_from_matches"]);
 
 function kindOf(toolName: string): ToolProgressKind {
   if (PARTY_TOOLS.has(toolName)) return "party";

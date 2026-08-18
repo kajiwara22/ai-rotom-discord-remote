@@ -565,7 +565,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     function: {
       name: "list_matches",
       description:
-        "自分が投稿した対戦動画に含まれる対戦の一覧を取得する。1つの動画に複数の対戦が入っているため、振り返りたい対戦を選ぶために最初に呼ぶ。各対戦の matchId・勝敗・相手の先発が分かる。URL に再生位置（t=）が含まれていれば、その位置の対戦を matchAtTimestamp として示す。",
+        "自分が投稿した対戦動画に含まれる対戦の一覧を取得する。1つの動画に複数の対戦が入っているため、振り返りたい対戦を選ぶために最初に呼ぶ。各対戦の matchId・勝敗・相手の先発・使用パーティが分かる。URL に再生位置（t=）が含まれていれば、その位置の対戦を matchAtTimestamp として示す。",
       parameters: {
         type: "object",
         properties: {
@@ -584,7 +584,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     function: {
       name: "get_match",
       description:
-        "1つの対戦の記録を取得する。相手の構築6体・相手の先発2体・自分の先発と選出4体・勝敗・動画の該当位置が分かる。技やダメージなどの行動ログは記録されていないため、選出や構築相性の振り返りに使うこと。自分の控え2体を含めて考えるには、保存済みパーティ（load_party）を併せて参照する。",
+        "1つの対戦の記録を取得する。相手の構築6体・相手の先発2体・自分のパーティ名（party）と6体構成（team）・自分の先発と選出4体・勝敗・動画の該当位置が分かる。技やダメージなどの行動ログは記録されていないため、選出や構築相性の振り返りに使うこと。持ち物・技などのパーティ詳細が必要なら、party を load_party に渡して保存済みパーティを取得する。",
       parameters: {
         type: "object",
         properties: {
@@ -594,6 +594,23 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           },
         },
         required: ["matchId"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_party_from_matches",
+      description:
+        "対戦記録に登場する自分のパーティの情報を取得する。name 省略時は記録に登場するパーティの一覧（使用回数・勝敗）を返す。name 指定時はそのパーティの 6 体構成と、そのパーティを使った直近の対戦（最大 10 戦）を返す。パーティ名は list_matches / get_match の party フィールドで確認できる。持ち物・技・努力値などの詳細が必要な場合は、保存済みパーティ（load_party）に party を渡して取得すること。",
+      parameters: {
+        type: "object",
+        properties: {
+          name: {
+            type: "string",
+            description: "パーティ名（list_matches / get_match の party フィールドと同じ値）。省略時は一覧を返す",
+          },
+        },
       },
     },
   },
