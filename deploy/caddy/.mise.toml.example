@@ -13,6 +13,12 @@ BASE_DOMAIN = "home.example.com"
 # Web UI を公開するホスト名（BASE_DOMAIN のサブドメインであること）
 ROTOM_HOST = "rotom.home.example.com"
 
+# PI Web（ブラウザから Pi 上のコーディングエージェントを操作する Web UI）を公開する
+# ホスト名（BASE_DOMAIN のサブドメインであること）。Caddy はここへ、Pi のホストに
+# インストール済みの pi-web ユーザーサービス（既定 127.0.0.1:8504）を HTTPS で中継する。
+# 待ち受けポートを変えている場合のみ PI_WEB_PORT も指定する（既定 8504）。
+PI_WEB_HOST = "pi.home.example.com"
+
 # Let's Encrypt に登録するメールアドレス（証明書の期限切れ通知先）
 ACME_EMAIL = "you@example.com"
 

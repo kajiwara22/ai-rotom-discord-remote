@@ -21,6 +21,15 @@ services:
       ACME_EMAIL: ${ACME_EMAIL:?未設定です。.mise.local.toml を用意してください}
       CF_API_TOKEN: ${CF_API_TOKEN:?未設定です。.mise.local.toml を用意してください}
 
+      # PI Web（ブラウザから Pi 上のコーディングエージェントを操作する Web UI）を
+      # 公開するホスト名。Pi のホスト側で `pi-web install` 済みのユーザーサービスが
+      # 既定 127.0.0.1:8504 で待ち受けている想定。まだ導入していなければ、この変数だけ
+      # 設定しても該当ホスト名へのアクセスが 502 になるだけで無害。
+      PI_WEB_HOST: ${PI_WEB_HOST:?未設定です。.mise.local.toml に PI_WEB_HOST を追加してください}
+
+      # PI Web の待ち受けポート（既定 8504。変えている場合のみ指定する）。
+      PI_WEB_PORT: ${PI_WEB_PORT:-8504}
+
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       # 取得済み証明書と ACME アカウント鍵。

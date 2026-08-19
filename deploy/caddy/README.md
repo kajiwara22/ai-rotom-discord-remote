@@ -67,6 +67,8 @@ BASE_DOMAIN = "home.example.com"
 ROTOM_HOST = "rotom.home.example.com"
 ACME_EMAIL = "you@example.com"
 CF_API_TOKEN = "（手順 1 で発行したトークン）"
+# PI Web を使う場合は「PI Web を公開する」の節も参照（任意）
+PI_WEB_HOST = "pi.home.example.com"
 ```
 
 `docker-compose.yml` はこれらをシェルの環境変数として受け取ります。mise がこのディレクトリで有効になっていれば、そのまま `docker compose` に渡ります。
@@ -75,7 +77,7 @@ CF_API_TOKEN = "（手順 1 で発行したトークン）"
 
 ```bash
 mise trust
-mise env   # 4 つの変数が export されていれば OK
+mise env   # BASE_DOMAIN / ROTOM_HOST / ACME_EMAIL / CF_API_TOKEN / PI_WEB_HOST が export されていれば OK
 ```
 
 **`.mise.toml` は API トークンを含むため `.gitignore` 済みです。コミットしないでください。**
@@ -124,9 +126,81 @@ BIND_HOST = "127.0.0.1"
 
 これで平文の `:3210` が LAN から見えなくなり、家庭内の通信もすべて TLS を通ります。Cloudflare Tunnel（`cloudflared`）も `http://localhost:3210` を見ているため、この変更の影響を受けません。
 
+## PI Web（Pi 上で動くコーディングエージェントをブラウザから操作する）を公開する
+
+[PI Web](https://pi-web.dev/) は Pi コーディングエージェントの Web UI です。ブラウザを操作面にして、実際のエージェント（セッション・ターミナル・エディタ）は Pi の実ワークスペースで動き続けます。このリポジトリを Pi 上で直接編集したい場合は、PI Web を Pi にインストールして Caddy 経由で HTTPS 公開します。
+
+```
+ブラウザ (家庭内 LAN)
+    ↓ https://pi.kajilab.work  →  DNS が Pi の LAN IP を返す
+Raspberry Pi
+    ├── Caddy (:443)
+    │     ├── pi.kajilab.work        → PI Web (127.0.0.1:8504, user service)
+    │     └── poke-coach.kajilab.work → rpi-bridge (127.0.0.1:3210)
+    └── PI Web（systemd user サービス: pi-web / pi-web-sessiond）
+```
+
+PI Web は**コンテナではなく Pi ホストにユーザーサービスとしてインストールします**。エージェントのセッションが rpi-bridge と同じ環境（mise・Node・`~/.ai-rotom/parties.json`・`~/.local/share/rotom`・OpenCode の鍵・git）をそのまま使えるようにするためです。Caddy は host ネットワークで動いているため、`127.0.0.1:8504` への `reverse_proxy` だけで完結します（WebSocket も Caddy が自動でアップグレードします）。
+
+### 前提
+
+- Node.js 22.19+ と npm
+- [Pi コーディングエージェント](https://github.com/earendil-works/pi) が `>=0.84.0` で導入・設定済みであること（Pi Web は Pi 本体の設定・モデル・セッションをそのまま使います）
+- git と、エージェントが使う開発ツール
+
+### 1. DNS レコード
+
+| Type | Name | IPv4 address | Proxy status |
+|---|---|---|---|
+| A | `pi`（例: `pi.kajilab.work`） | Pi の LAN IP | **DNS only（グレー）** |
+
+ワイルドカード証明書がすでにあるため、このレコード追加では証明書の再取得は発生しません。
+
+### 2. Pi に PI Web をインストール
+
+```bash
+npm install -g @jmfederico/pi-web --allow-scripts=node-pty
+pi-web install                      # systemd user サービス（pi-web / pi-web-sessiond）を生成
+sudo loginctl enable-linger $USER   # ログインがなくても再起動後も自動起動させる（サーバー運用では必須）
+pi-web status
+pi-web doctor
+```
+
+既定では `127.0.0.1:8504` を待ち受けます（ポートを変えたい場合は `pi-web install --port <port>` で再生成）。
+
+### 3. `.mise.toml` に `PI_WEB_HOST` を追加
+
+`docker-compose.yml` が参照する必須変数に `PI_WEB_HOST` が増えました。**Pi 側の `deploy/caddy/.mise.toml`（git 管理外・API トークン入り）にも追記してください。**（このリポジトリの `.mise.toml.example` は更新済みです。）
+
+```toml
+PI_WEB_HOST = "pi.kajilab.work"
+```
+
+待ち受けポートを変えている場合のみ `PI_WEB_PORT` も指定します（既定 8504）。
+
+### 4. Caddy に反映
+
+`Caddyfile` の変更は無停止で反映できます（`mise run reload`）。ただし `docker-compose.yml` の `environment` は**コンテナ作成時に焼き込まれる**ため、`PI_WEB_HOST` を足した初回だけコンテナの再作成が必要です。
+
+```bash
+mise run up        # 初回（コンテナ再作成）。以降の Caddyfile 変更は mise run reload
+```
+
+### 5. 動作確認
+
+```bash
+curl -v https://pi.kajilab.work/
+```
+
+PI Web の画面が入れば完了。PI Web のログは `pi-web logs`、Caddy のアクセスログは `mise run logs`。PI Web が未起動のうちにアクセスすると Caddy が 502 を返します（ルートの追加自体は無害）。
+
+### セキュリティ上の注意
+
+PI Web はサンドボックスではありません。**信用したネットワーク（家庭内 LAN）からだけアクセスできる構成を前提**にしてください。この構成は他の Web UI と同じく、DNS がプライベート IP を返す LAN 限定公開です。Cloudflare Tunnel 経由でインターネット側へ出す場合は、必ず CF Access などの認証を挟んでください（`README.md` / AGENTS.md の Worker 運用と同じ方針）。
+
 ## mise を使わない場合
 
-`docker-compose.yml` はシェルの環境変数を参照しているだけなので、mise は必須ではありません。同じ 4 つの変数を渡せれば何でも動きます。
+`docker-compose.yml` はシェルの環境変数を参照しているだけなので、mise は必須ではありません。同じ 5 つの変数（`BASE_DOMAIN` / `ROTOM_HOST` / `ACME_EMAIL` / `CF_API_TOKEN` / `PI_WEB_HOST`）を渡せれば何でも動きます。
 
 このディレクトリに `.env` を置く方法が最も簡単です（compose が自動で読み込みます）。
 
@@ -136,6 +210,7 @@ BASE_DOMAIN=home.example.com
 ROTOM_HOST=rotom.home.example.com
 ACME_EMAIL=you@example.com
 CF_API_TOKEN=（手順 1 で発行したトークン）
+PI_WEB_HOST=pi.home.example.com
 EOF
 
 docker compose up -d --build
@@ -166,7 +241,7 @@ dig +short rotom.home.example.com
 `docker-compose.yml` が環境変数を受け取れていません。
 
 ```bash
-mise env | grep -E "BASE_DOMAIN|ROTOM_HOST|ACME_EMAIL|CF_API_TOKEN"
+mise env | grep -E "BASE_DOMAIN|ROTOM_HOST|ACME_EMAIL|CF_API_TOKEN|PI_WEB_HOST"
 ```
 
 何も出ない場合は、次を確認します。

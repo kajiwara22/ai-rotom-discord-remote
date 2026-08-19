@@ -76,6 +76,15 @@
 		reverse_proxy 127.0.0.1:3210
 	}
 
+	@piweb host {$PI_WEB_HOST}
+	handle @piweb {
+		# PI Web（Pi のコーディングエージェントをブラウザから操作する Web UI）。
+		# コンテナではなく Pi ホストのユーザーサービス（pi-web install）が待ち受けている想定。
+		# セッション・ターミナルの WebSocket は reverse_proxy が自動で 101 アップグレードする。
+		# encode は WebSocket フレームに掛からないため、SSE 用の圧縮除外は不要。
+		reverse_proxy 127.0.0.1:{$PI_WEB_PORT}
+	}
+
 	# ワイルドカード証明書なので、DNS さえ引ければ任意のホスト名で到達しうる。
 	# 定義していないホスト名は接続を切る。
 	handle {
