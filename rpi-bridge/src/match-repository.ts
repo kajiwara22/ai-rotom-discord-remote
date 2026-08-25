@@ -278,7 +278,7 @@ export async function getMatch(matchId: string): Promise<unknown> {
   const row = rows[0];
   const notes = [
     "この記録に技・ダメージ・ターン推移は含まれない。選出フェーズまでを扱うこと",
-    "team はこの対戦で使ったパーティ 6 体、party はそのパーティ名。持ち物・技・努力値まで見るなら、保存済みパーティ（load_party）に party を渡して取得すること",
+    "team はこの対戦で使ったパーティ 6 体、party はそのパーティ名。分析ツール（analyze_selection など）で振り返る前に、まず load_party に party を渡して持ち物・技・性格・SP を取得すること。名前だけを渡すと SP=0・持ち物なしとして計算され、実戦と違う結論になる。分析には team（6 体）を使い、selfSelection（選出 4 体）をパーティ全体と混同しないこと",
   ];
   if (presentOrUndefined(row.opponentSelection) === undefined) {
     notes.push("相手の選出 4 体は未記録。相手について分かるのは構築 6 体と先発 2 体のみ");
