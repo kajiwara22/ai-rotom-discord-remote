@@ -42,3 +42,4 @@ docs/ui-mock/
 
 # Mise
 .mise.toml
+.mise.local.toml
