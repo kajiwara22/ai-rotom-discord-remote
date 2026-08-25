@@ -56,7 +56,7 @@
         scoreEnd: "ほめて、まちがえた ところを かんたんに おしえてね。",
       },
       sec: (n) => n + "びょう",
-      speak: "よみあげ", copy: "コピー",
+      copy: "コピー",
       rename: "なまえを かえる", del: "けす",
       renameTitle: "なまえを かえる",
       delTitle: "この おはなしを けす？",
@@ -134,7 +134,7 @@
         scoreEnd: "間違えた問題だけ簡単に解説してください。",
       },
       sec: (n) => n + "秒",
-      speak: "読み上げ", copy: "コピー",
+      copy: "コピー",
       rename: "名前を変更", del: "削除",
       renameTitle: "名前を変更",
       delTitle: "このチャットを削除しますか？",
@@ -562,14 +562,10 @@
       const acts = document.createElement("div");
       acts.className = "msg-actions";
       acts.innerHTML =
-        '<button type="button" data-a="speak">' +
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg><span></span></button>' +
         '<button type="button" data-a="copy">' +
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg><span></span></button>';
-      acts.querySelectorAll("span")[0].textContent = d.speak;
-      acts.querySelectorAll("span")[1].textContent = d.copy;
+      acts.querySelector("span").textContent = d.copy;
 
-      acts.querySelector('[data-a="speak"]').addEventListener("click", () => speak(bubble.innerText));
       acts.querySelector('[data-a="copy"]').addEventListener("click", () => {
         if (navigator.clipboard) {
           navigator.clipboard.writeText(content).then(() => toast(t().copied));
@@ -579,15 +575,6 @@
     }
 
     els.inner.appendChild(el);
-  }
-
-  function speak(text) {
-    if (!("speechSynthesis" in window)) return;
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = "ja-JP";
-    u.rate = 0.95;
-    window.speechSynthesis.speak(u);
   }
 
   function appendError(msg, retryText) {
