@@ -4,6 +4,9 @@ dist/
 .wrangler/
 *.log
 
+# 実 API キーを含むためコミットしない（テンプレートは .env.example）
+rpi-bridge/.env
+
 # Caddy（TLS 終端）のログ
 # 環境変数と Cloudflare API トークンは deploy/caddy/.mise.toml に置く。
 # 下の Mise セクションで除外しているため、ここには書かない。
