@@ -16,6 +16,8 @@
 const PASSTHROUGH_LIMIT = 5000;
 /** 整形関数がなく上限も超えた場合の最終防壁 */
 const HARD_LIMIT = 6000;
+/** 育成論の考察本文を LLM に渡す上限。本文は DB には全文残る（ADR-0013） */
+const THEORY_BODY_LIMIT = 4800;
 
 /** ダメージ計算結果 1 件（outgoing / incoming / results の要素） */
 interface DamageEntry {
@@ -69,7 +71,39 @@ function compactPokemonList(list: unknown, limit: number): Json[] {
 
 type Formatter = (data: Json) => unknown;
 
+/**
+ * 育成論ツールの考察本文を上限で区切る。本文は prose なので JSON 構造は壊れない。
+ * 構造化ヘッダ（性格・特性・持ち物・SP・技）はそのまま残す。
+ * 全文は DB の theory_refs.body_text に保持されている（ADR-0013）。
+ */
+function boundTheoryBody(data: Json): Json {
+  const theory = (data.theory ?? {}) as Json;
+  const body = typeof theory.body === "string" ? theory.body : "";
+  if (body.length <= THEORY_BODY_LIMIT) return data;
+  return {
+    ...data,
+    theory: {
+      ...theory,
+      body: body.slice(0, THEORY_BODY_LIMIT),
+      body_note: `考察本文は全 ${body.length} 字。先頭 ${THEORY_BODY_LIMIT} 字のみ表示（後半は省略）`,
+    },
+  };
+}
+
 const FORMATTERS: Record<string, Formatter> = {
+  // 特性は名前（abilities / abilitiesJa）だけが返り、効果は入っていない。
+  // 効果を書かせるとモデルが記憶（従来作）で補うため、get_ability_info での裏取りを促す
+  get_pokemon_info: (d) => ({
+    ...d,
+    note: "特性の効果を回答に書く場合は、必ず get_ability_info を呼んで確認してから書くこと",
+  }),
+
+  // get_pokemon_info と同じ理由。basic に特性名が含まれる
+  get_pokemon_summary: (d) => ({
+    ...d,
+    note: "特性の効果を回答に書く場合は、必ず get_ability_info を呼んで確認してから書くこと",
+  }),
+
   // 実測 113,370 字。results が 280 件にもなるのは、このツールが learnset を
   // 参照せず全技を計算しているため（同じポケモンでも analyze_matchup は 42 件）。
   // 覚えない技が上位を占めうるので、その旨を必ず添える
@@ -238,6 +272,11 @@ const FORMATTERS: Record<string, Formatter> = {
       pokemon: compactPokemonList(list, 40),
     };
   },
+
+  // 育成論の考察本文は DB には全文残しつつ、LLM に渡す本文だけを上限で区切る。
+  // 構造化ヘッダ（性格・特性・持ち物・SP・技）は切らない（ADR-0013）
+  import_theory_from_url: boundTheoryBody,
+  get_theory: boundTheoryBody,
 };
 
 /**

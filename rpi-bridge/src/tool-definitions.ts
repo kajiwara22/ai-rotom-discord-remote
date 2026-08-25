@@ -5,7 +5,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: "function",
     function: {
       name: "get_pokemon_info",
-      description: "ポケモンの詳細情報（種族値・タイプ・特性・体重）を取得する。ポケモンチャンピオンズ (Pokemon Champions) 仕様。",
+      description: "ポケモンの詳細情報（種族値・タイプ・特性・体重）を取得する。ポケモンチャンピオンズ (Pokemon Champions) 仕様。特性は名前のみ返るため、その効果を回答に書く場合は get_ability_info を呼んで確認すること。",
       parameters: {
         type: "object",
         properties: { name: { type: "string", description: "ポケモン名（日本語 or 英語）" } },
@@ -17,7 +17,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: "function",
     function: {
       name: "get_pokemon_summary",
-      description: "ポケモンの総合プロファイル（基本情報・防御相性・覚える技の集計・実数値）を一度に取得する。",
+      description: "ポケモンの総合プロファイル（基本情報・防御相性・覚える技の集計・実数値）を一度に取得する。特性は名前のみ返るため、その効果を回答に書く場合は get_ability_info を呼んで確認すること。",
       parameters: {
         type: "object",
         properties: { name: { type: "string", description: "ポケモン名（日本語 or 英語）" } },
@@ -103,7 +103,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: "function",
     function: {
       name: "get_learnset",
-      description: "ポケモンチャンピオンズで特定のポケモンが覚える技の一覧を取得する。",
+      description: "ポケモンチャンピオンズで特定のポケモンが覚える技の一覧を取得する。技名のみ返るため、威力・命中・効果を回答に書く場合は get_move_info を呼んで確認すること。",
       parameters: {
         type: "object",
         properties: { name: { type: "string", description: "ポケモン名（日本語 or 英語）" } },
@@ -433,7 +433,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: "function",
     function: {
       name: "analyze_selection",
-      description: "6v6 パーティ間の全対面について、タイプ相性・素早さ比較・最大ダメージ見積もりをマトリクスで返す。",
+      description: "6v6 パーティ間の全対面について、タイプ相性・素早さ比較・最大ダメージ見積もりをマトリクスで返す。メンバーは name だけでなく nature / evs(SP) / ability / item まで渡すこと（名前だけだと SP=0・持ち物なしとして計算され、実戦と違う結果になる）。対戦振り返りでは get_match の party を load_party に渡して詳細を取得してから呼ぶこと。",
       parameters: {
         type: "object",
         properties: {
@@ -491,7 +491,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: "function",
     function: {
       name: "load_party",
-      description: "保存済みパーティを name 指定で1件取得する。",
+      description: "保存済みパーティを name 指定で 1 件取得し、各メンバーの持ち物・技・性格・SP を含む完全な構成を返す。対戦振り返りでは get_match の party をそのまま渡して自分のパーティ詳細を取得すること。",
       parameters: {
         type: "object",
         properties: { name: { type: "string", description: "取得するパーティ名" } },
@@ -614,6 +614,44 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       },
     },
   },
+
+  // 育成論の取り込み（ポケ徹 yakkun.com。docs/adr/ADR-0013.md）
+  {
+    type: "function",
+    function: {
+      name: "import_theory_from_url",
+      description:
+        "ポケモン徹底攻略(yakkun.com)のポケモンチャンピオンズ育成論のURLを取り込み、型（性格・特性・持ち物・SP配分・技）と考察本文（調整意図・与/被ダメ計・立ち回り・苦手対面）を取得する。利用者が育成論のURLを貼って取り込みを求めたらこのツールを呼ぶ。",
+      parameters: {
+        type: "object",
+        properties: {
+          url: {
+            type: "string",
+            description: "育成論のURL（例: https://yakkun.com/ch/theory/n413）。#以降のフラグメントは無視される",
+          },
+        },
+        required: ["url"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_theory",
+      description:
+        "過去に取り込んだ育成論をURL指定で再取得する。取り込み済みでない場合はエラーを返すので、そのときは import_theory_from_url を呼ぶこと。",
+      parameters: {
+        type: "object",
+        properties: {
+          url: {
+            type: "string",
+            description: "取り込んだ育成論のURL",
+          },
+        },
+        required: ["url"],
+      },
+    },
+  },
 ];
 
 export const DISCORD_RESTRICTIONS = `
@@ -633,6 +671,13 @@ export function getSystemPrompt(): string {
 - 従来作 (SV / 剣盾 / USUM / BDSP / LA 等) の仕様・技威力・特性効果・種族値・タイプ相性などを前提にしないでください。
 - ポケモン名・技名・特性・持ち物・タイプ・素早さ等の固有名詞や数値がユーザー発話に出た時点で、まずツールを呼んで事実を取得してから回答すること。記憶や推測で即答しないでください。
 
+## ツールの連鎖（数珠つなぎ）
+- ツールの結果に「特性名・技名・持ち物名」が出てきて、その**効果や説明**を回答に書く場合は、必ず対応する詳細ツールを呼んで確認してから書くこと。結果に載っている名前だけでは効果を書かない。
+  - 特性 → get_ability_info / 技 → get_move_info / 持ち物 → get_item_info
+- 例: get_pokemon_info がメガゲンガーの特性として「かげふみ」を返しても、その効果を記憶で書かず、get_ability_info(name="かげふみ") の結果だけを書く。
+- 記憶にある従来作の効果（発動率・追加効果など）とツールの返答が食い違う場合は、常にツールの返答を正とする。たとえば「のろわれボディ」はツールでは「30%で技をかなしばりにする」であり、記憶の「こんらん」と書いてはいけない。
+- 1 回の回答で複数の特性・技・持ち物に触れる場合も、それぞれ対応するツールで確認してから書く。
+
 ## 収録されていないポケモン・技への対応
 ポケモンチャンピオンズには**収録されていないポケモンや技があります**。
 - ツールが「見つかりません」と返した場合、それは未収録ということです。**ポケモンチャンピオンズには登場しない**と正直に伝えてください。従来作の知識で代わりに答えてはいけません。
@@ -651,6 +696,17 @@ export function getSystemPrompt(): string {
 - 火力調整: 主要対面相手を確定1発/2発で落とす最低限の振りを逆算
 - 耐久調整: 主要対面相手の技を確定耐えする最低限の振りを逆算
 - 素早さ調整: 特定ラインを抜く/同速回避するピンポイント振り
+
+## 対戦振り返りの手順（list_matches / get_match / get_party_from_matches）
+対戦記録を振り返るときは、必ず次の順で進めてください。
+
+1. list_matches に動画 URL（t= は付けたまま）を渡し、振り返る対戦の matchId を決める
+2. get_match（matchId）で、自分のパーティ名（party）・6 体（team）・先発・選出と、相手の構築・先発・選出・勝敗を確認する
+3. **load_party に party を渡し、自分のパーティの持ち物・技・性格・SP を取得する**。この手順を飛ばして名前だけを analyze_selection などの分析ツールへ渡してはいけません。名前だけだと「SP=0・持ち物なし・技なし」として計算され、実際の対戦と違う結論になります
+4. 取得した詳細（nature / evs(SP) / ability / item / moves）を付けて分析ツール（analyze_selection / analyze_matchup など）を呼ぶ
+
+- 分析ツールへ渡す自分のパーティは team（6 体）を使うこと。selfSelection（選出 4 体）は選出の記録であってパーティ全体ではありません
+- load_party が「見つかりません」を返したら、保存済みパーティが無いということです。その旨を利用者に伝え、team の 6 体名だけを材料に一般論で話してください。名前だけでダメージ計算の数値を断定してはいけません
 
 ## 応答スタイル
 - 簡潔に回答する

@@ -42,6 +42,7 @@ import {
   executeMatchTool,
   closeMatchRepository,
 } from "./match-repository.js";
+import { isTheoryTool, executeTheoryTool } from "./theory-import.js";
 
 const PORT = parseInt(process.env.PORT ?? "3210", 10);
 const HOST = process.env.HOST ?? "127.0.0.1";
@@ -494,6 +495,19 @@ async function handleToolCall(
     // 応答は MCP と同じ形にそろえ、呼び出し側の分岐を増やさない
     if (isMatchTool(toolName)) {
       const text = await executeMatchTool(toolName, args);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          success: true,
+          result: { content: [{ type: "text", text }] },
+        }),
+      );
+      return;
+    }
+
+    // 育成論の取り込み（ADR-0013）。同じく bridge 側で処理する
+    if (isTheoryTool(toolName)) {
+      const text = await executeTheoryTool(toolName, args);
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(
         JSON.stringify({

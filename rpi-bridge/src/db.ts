@@ -112,6 +112,25 @@ export function getDb(): Database.Database {
   // マイグレーション: users に avatar, mode カラム追加
   migrateUsersTable();
 
+  // 育成論取り込み（ADR-0013）。URL をキーにしたキャッシュで、
+  // 構造化ヘッダが取れないページでも考察本文は必ず残す
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS theory_refs (
+      url TEXT PRIMARY KEY,
+      pokemon TEXT,
+      title TEXT,
+      nature TEXT,
+      ability TEXT,
+      item TEXT,
+      evs_json TEXT,
+      moves_json TEXT,
+      rule TEXT,
+      role TEXT,
+      body_text TEXT,
+      fetched_at INTEGER NOT NULL
+    );
+  `);
+
   console.log(`[db] SQLite 初期化完了: ${dbPath}`);
   return db;
 }
