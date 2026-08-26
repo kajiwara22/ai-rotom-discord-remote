@@ -37,6 +37,7 @@
         party: () => "パーティを みているよ",
         match: () => "たたかいの きろくを みているよ",
         theory: () => "そだてかたを よみこんでいるよ",
+        ranking: (x) => (x ? x + " の じゅんいを しらべているよ" : "じゅんいひょうを みているよ"),
       },
       // 3択クイズ（ADR-0011）。正誤判定はここで完結し、AI には問い合わせない
       quiz: {
@@ -57,6 +58,7 @@
       },
       sec: (n) => n + "びょう",
       copy: "コピー",
+      copyCode: "コードを コピー",
       rename: "なまえを かえる", del: "けす",
       renameTitle: "なまえを かえる",
       delTitle: "この おはなしを けす？",
@@ -116,6 +118,7 @@
         party: () => "パーティを読み書き中",
         match: () => "対戦記録を参照中",
         theory: () => "育成論を取り込んでいます",
+        ranking: (x) => (x ? x + " の順位を調べています" : "順位表を参照中"),
       },
       quiz: {
         count: (i, n) => i + " 問目 / 全 " + n + " 問",
@@ -135,6 +138,7 @@
       },
       sec: (n) => n + "秒",
       copy: "コピー",
+      copyCode: "コードをコピー",
       rename: "名前を変更", del: "削除",
       renameTitle: "名前を変更",
       delTitle: "このチャットを削除しますか？",
@@ -265,6 +269,48 @@
     // 表は横スクロール用のラッパで包む
     return html.replace(/<table>/g, '<div class="tablewrap"><table>')
                .replace(/<\/table>/g, "</table></div>");
+  }
+
+  /**
+   * コードブロックに「コピー」ボタンを付ける。
+   * スマホでは長いコードの範囲選択が難しく、ワンタップで全文をコピーできるようにする。
+   * marked の出力は <pre><code> なので、ラッパ + ヘッダを挟んでボタンを置く。
+   */
+  function enhanceCodeBlocks(rootEl, d) {
+    rootEl.querySelectorAll("pre").forEach((pre) => {
+      if (pre.closest(".codeblock")) return;
+
+      const code = pre.querySelector("code");
+      const lang = code && (code.className.match(/language-(\S+)/) || [])[1];
+
+      const wrap = document.createElement("div");
+      wrap.className = "codeblock";
+
+      const head = document.createElement("div");
+      head.className = "codeblock-head";
+      if (lang) {
+        const label = document.createElement("span");
+        label.className = "codeblock-lang";
+        label.textContent = lang;
+        head.appendChild(label);
+      }
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "codeblock-copy";
+      btn.textContent = d.copyCode;
+      btn.addEventListener("click", () => {
+        if (navigator.clipboard) {
+          // marked はコード末尾に改行を 1 つ付けるため、コピー時は落とす
+          navigator.clipboard.writeText(pre.textContent.replace(/\n$/, "")).then(() => toast(t().copied));
+        }
+      });
+      head.appendChild(btn);
+
+      pre.parentNode.insertBefore(wrap, pre);
+      wrap.appendChild(head);
+      wrap.appendChild(pre);
+    });
   }
 
   /* ---------- モード適用 ---------- */
@@ -555,8 +601,10 @@
       role === "user" ? (currentUser ? currentUser.display_name : "") : d.aiName;
 
     const bubble = el.querySelector(".bubble");
-    if (role === "assistant") bubble.innerHTML = renderMarkdown(content);
-    else bubble.textContent = content;
+    if (role === "assistant") {
+      bubble.innerHTML = renderMarkdown(content);
+      enhanceCodeBlocks(bubble, d);
+    } else bubble.textContent = content;
 
     if (role === "assistant") {
       const acts = document.createElement("div");

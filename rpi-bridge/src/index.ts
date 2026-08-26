@@ -475,7 +475,14 @@ function serveStatic(url: string, res: ServerResponse): void {
   const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
   const content = readFileSync(filePath);
 
-  res.writeHead(200, { "Content-Type": contentType });
+  const headers: Record<string, string> = { "Content-Type": contentType };
+  // HTML/CSS/JS はキャッシュさせない。更新がスマホに反映されない（古い画面のまま）のを防ぐ。
+  // 画像はボリュームがあるため対象外。
+  if (ext === ".html" || ext === ".css" || ext === ".js") {
+    headers["Cache-Control"] = "no-cache";
+  }
+
+  res.writeHead(200, headers);
   res.end(content);
 }
 

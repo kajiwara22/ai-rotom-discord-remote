@@ -317,6 +317,32 @@ button { font: inherit; color: inherit; }
   border-radius: 8px; overflow-x: auto;
 }
 .bubble pre code { background: none; padding: 0; }
+/* コードブロックのコピーボタン（スマホで範囲選択が難しいため） */
+.codeblock { margin: .6em 0; }
+.codeblock-head {
+  display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+  padding: 3px 10px;
+  background: rgba(0,0,0,.06);
+  border-radius: 8px 8px 0 0;
+}
+.codeblock-lang {
+  margin-right: auto;
+  font-size: .72rem;
+  color: var(--text-mute);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-transform: lowercase;
+}
+.codeblock-copy {
+  display: inline-flex; align-items: center;
+  height: 30px; padding: 0 10px;
+  background: transparent; border: none; border-radius: 999px;
+  color: var(--text-mute); font-size: .75rem; cursor: pointer;
+}
+.codeblock-copy:hover, .codeblock-copy:active { background: rgba(0,0,0,.08); color: var(--text); }
+.codeblock pre {
+  margin: 0;
+  border-radius: 0 0 8px 8px;
+}
 /* 表は必ず横スクロールさせ、狭い画面で本文を潰さない */
 .tablewrap { overflow-x: auto; margin: .6em 0; -webkit-overflow-scrolling: touch; }
 .bubble table { border-collapse: collapse; width: 100%; min-width: 380px; font-size: .95rem; }
