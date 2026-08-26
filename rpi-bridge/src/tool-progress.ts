@@ -15,7 +15,8 @@ export type ToolProgressKind =
   | "analyze"
   | "party"
   | "match"
-  | "theory";
+  | "theory"
+  | "ranking";
 
 export interface ToolProgress {
   kind: ToolProgressKind;
@@ -39,10 +40,14 @@ const MATCH_TOOLS = new Set(["list_matches", "get_match", "get_party_from_matche
 /** 育成論の取り込み（ADR-0013） */
 const THEORY_TOOLS = new Set(["import_theory_from_url", "get_theory"]);
 
+/** 使用率ランキング（ADR-0014）。get_ 接頭辞で lookup に落ちるため先に見る */
+const RANKING_TOOLS = new Set(["get_usage_ranking"]);
+
 function kindOf(toolName: string): ToolProgressKind {
   if (PARTY_TOOLS.has(toolName)) return "party";
   if (MATCH_TOOLS.has(toolName)) return "match";
   if (THEORY_TOOLS.has(toolName)) return "theory";
+  if (RANKING_TOOLS.has(toolName)) return "ranking";
   if (toolName.startsWith("calculate_")) return "calculate";
   if (toolName.startsWith("search_")) return "search";
   if (toolName.startsWith("get_")) return "lookup";
@@ -62,7 +67,7 @@ function nestedName(value: unknown): string | undefined {
  * ツールごとに引数名が違うため、よくある位置を順に見る。
  */
 function targetOf(args: Record<string, unknown>): string | undefined {
-  for (const key of ["name", "moveName", "abilityName", "type", "around"]) {
+  for (const key of ["name", "moveName", "abilityName", "type", "around", "pokemon"]) {
     const value = args[key];
     if (typeof value === "string" && value.length > 0) return value;
   }

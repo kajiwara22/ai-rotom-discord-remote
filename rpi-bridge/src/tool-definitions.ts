@@ -652,6 +652,34 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       },
     },
   },
+
+  // 使用率ランキング（ポケ徹 yakkun.com。docs/adr/ADR-0014.md）
+  {
+    type: "function",
+    function: {
+      name: "get_usage_ranking",
+      description:
+        "ポケモンチャンピオンズの使用率ランキング（順位表）を取得する。シングル／ダブルを rule で選ぶ。返るのは順位とポケモン名のみで、数値の使用率（%）は公開されていないため、「◯%使われている」とは言わず「◯位」と答えること。また必ず updatedAt を「◯月◯日時点」と明示すること。特定のポケモンの順位だけを知りたいときは pokemon を指定する。",
+      parameters: {
+        type: "object",
+        properties: {
+          rule: {
+            type: "string",
+            enum: ["single", "double"],
+            description: "シングルバトルの順位なら single、ダブルバトルなら double。省略時は single",
+          },
+          top: {
+            type: "number",
+            description: "上位何件まで返すか（1〜100）。省略時は全件（100 件）",
+          },
+          pokemon: {
+            type: "string",
+            description: "特定のポケモンの順位だけを調べる場合のポケモン名（例: ガブリアス、メガゲンガー）。省略時は一覧を返す",
+          },
+        },
+      },
+    },
+  },
 ];
 
 export const DISCORD_RESTRICTIONS = `
