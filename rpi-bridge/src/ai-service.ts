@@ -1,4 +1,4 @@
-import type { ChatMessage, ToolCall, ToolDefinition, OpenCodeGoResponse } from "./types.js";
+import type { ChatMessage, ToolCall, ToolDefinition, ModelDefinition, OpenCodeGoResponse } from "./types.js";
 import { TOOL_DEFINITIONS } from "./tool-definitions.js";
 import { formatToolResult } from "./tool-result-formatter.js";
 import {
@@ -15,33 +15,17 @@ import {
   prepareMessages,
   getOrCreateWebSession,
   getSystemPromptForUser,
+  getDefaultModelId,
+  getUserModelId,
   updateSessionName,
 } from "./conversation-manager.js";
 import { editOriginalResponse } from "./discord-webhook.js";
+import { resolveModelDefinition, DEFAULT_MODEL_ID } from "./model-registry.js";
 
-const MODEL = "deepseek-v4-pro";
+// モデル・reasoning_effort・max_tokens は model-registry.ts のモデル定義に移した
+// （ADR-0015）。理由: モデル名だけ差し替えると unknown の reasoning_effort が
+// 黙って既定へフォールバックするため、モデルと推論設定を一体管理する。
 const MAX_TOOL_CALLS = 30;
-/**
- * 推論モデルの思考量。応答時間は出力トークン数でほぼ決まり（実測で約 75 tok/s）、
- * その出力の 9 割前後が思考に消えるため、待ち時間のほとんどは思考時間である。
- *
- * 値: "none"（思考なし）/ "low" / "medium" / "high"。OpenAI 標準の "minimal" は
- * この API では受け付けられず既定にフォールバックする。
- *
- * 当初は "low" でも複雑な対戦分析では思考が 5,000 トークンに達し 1 問 2 分半
- * かかるため "none" にしていた。しかし "none" はツール連鎖（get_pokemon_info →
- * get_ability_info 等）を省略して従来作の記憶でハレーションを起こす実害が出た
- * （例: メガゲンガーの特性を「のろわれボディ」と誤答）。回答の正しさを応答時間
- * より優先するため "low" に戻す。単純な質問では none 3.0s / low 3.8s と差は
- * 小さいが、ツール選択の手前で事実確認の思考が入るようになる。
- */
-const REASONING_EFFORT = "low";
-/**
- * 1 回の生成の出力上限。4096 では分析系の回答がほぼ毎回途中で切れていた。
- * Discord 側は discord-webhook.ts が 1900 文字ずつ分割送信するため、
- * 上限を伸ばしても送信経路の制約には当たらない。
- */
-const MAX_TOKENS = 8192;
 
 /**
  * API 1 回あたりの上限。応答が返らないまま処理全体が固まるのを防ぐ。
@@ -92,27 +76,31 @@ export interface ChatCompletionResult {
   content: string | null;
   toolCalls: ToolCall[];
   finishReason: string;
+  /** 実際に使われたモデル（応答の data.model を正とする。ADR-0016） */
+  model: string;
 }
 
 export async function chatCompletion(
   messages: ChatMessage[],
   tools: ToolDefinition[],
+  model: ModelDefinition,
   apiKey: string,
   baseUrl: string,
 ): Promise<ChatCompletionResult> {
   // tools が空のときはフィールドごと省く。空配列を受け付けない API 実装があるため
+  // reasoning_effort も null のモデルではキー自体を省く（推論非対応モデル用）
   const payload = JSON.stringify({
-    model: MODEL,
+    model: model.id,
     messages,
     ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
-    max_tokens: MAX_TOKENS,
-    reasoning_effort: REASONING_EFFORT,
+    max_tokens: model.max_tokens,
+    ...(model.reasoning_effort != null ? { reasoning_effort: model.reasoning_effort } : {}),
   });
   // ツール定義は毎ターン再送されるため、payloadSize のうち何が固定費で
   // 何が会話の伸びなのかを分けて記録する
   const toolsSize = tools.length > 0 ? JSON.stringify(tools).length : 0;
   console.log(
-    `[ai] chatCompletion payloadSize=${payload.length} toolsSize=${toolsSize} messagesSize=${payload.length - toolsSize} messages=${messages.length}`,
+    `[ai] chatCompletion model=${model.id} payloadSize=${payload.length} toolsSize=${toolsSize} messagesSize=${payload.length - toolsSize} messages=${messages.length}`,
   );
 
   // タイムアウトの調整には「何秒で返ってきているか」が要る。
@@ -160,6 +148,8 @@ export async function chatCompletion(
     content: message.content,
     toolCalls: message.tool_calls ?? [],
     finishReason: choice.finish_reason,
+    // ゲートウェイが黙って既定へ落とした場合も、ここで実モデルが分かる（ADR-0016）
+    model: data.model || model.id,
   };
 }
 
@@ -169,19 +159,22 @@ export async function chatCompletion(
  */
 async function finalizeWithoutTools(
   messages: ChatMessage[],
+  model: ModelDefinition,
   apiKey: string,
   baseUrl: string,
   reason: string,
   fallbackNotice: string,
 ): Promise<ChatMessage[]> {
-  console.warn(`[ai] ツール呼び出しを打ち切り (${reason}) — 収集済みの情報で回答をまとめます`);
+  console.warn(`[ai] ツール呼び出しを打ち切り (${reason}) — 収集済みの情報で回答をまとめます (model=${model.id})`);
 
   try {
-    const { content, finishReason } = await chatCompletion(messages, [], apiKey, baseUrl);
+    const { content, finishReason, model: actualModel } =
+      await chatCompletion(messages, [], model, apiKey, baseUrl);
     if (content) {
       messages.push({
         role: "assistant",
         content: finishReason === "length" ? content + TRUNCATED_NOTICE : content,
+        model: actualModel,
       });
       return messages;
     }
@@ -196,6 +189,7 @@ async function finalizeWithoutTools(
 export async function executeToolCallLoop(
   initialMessages: ChatMessage[],
   tools: ToolDefinition[],
+  model: ModelDefinition,
   apiKey: string,
   baseUrl: string,
   executeTool: (name: string, args: Record<string, unknown>) => Promise<string>,
@@ -209,6 +203,7 @@ export async function executeToolCallLoop(
     if (deadlineAt !== undefined && Date.now() >= deadlineAt) {
       return finalizeWithoutTools(
         messages,
+        model,
         apiKey,
         baseUrl,
         `締切超過 loop=${loop}`,
@@ -218,16 +213,37 @@ export async function executeToolCallLoop(
 
     let completion: ChatCompletionResult;
     try {
-      completion = await chatCompletion(messages, tools, apiKey, baseUrl);
+      completion = await chatCompletion(messages, tools, model, apiKey, baseUrl);
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const hasToolResults = messages.some((m) => m.role === "tool");
+
+      // 選択モデルが既定でなく失敗した場合は、既定モデルで最終回答を試みる
+      // （ADR-0015）。既定モデル自体が最初の呼び出しで失敗した場合は、API 全体が
+      // 落ちている可能性が高いため例外のまま上へ投げる（従来どおり）。
+      if (model.id !== DEFAULT_MODEL_ID) {
+        const fallback = resolveModelDefinition(DEFAULT_MODEL_ID);
+        console.warn(
+          `[ai] モデル ${model.id} の呼び出しに失敗したため既定モデル ${fallback.id} へフォールバック (loop=${loop}): ${message}`,
+        );
+        return finalizeWithoutTools(
+          messages,
+          fallback,
+          apiKey,
+          baseUrl,
+          `API 呼び出し失敗 loop=${loop}: ${message}`,
+          "調べている途中で応答が返らなくなりました。もう一度聞いてください。",
+        );
+      }
+
       // API 側の失敗でループごと落とすと、ここまでのツール往復が丸ごと消える。
       // 集めた結果があるなら、それでまとめさせる方に倒す。
       // この経路はツール定義を送らないため入力も軽く、通りやすい。
-      if (!messages.some((m) => m.role === "tool")) throw error;
+      if (!hasToolResults) throw error;
 
-      const message = error instanceof Error ? error.message : String(error);
       return finalizeWithoutTools(
         messages,
+        model,
         apiKey,
         baseUrl,
         `API 呼び出し失敗 loop=${loop}: ${message}`,
@@ -239,21 +255,25 @@ export async function executeToolCallLoop(
     // 出力上限に当たったケース。ツール呼び出しが混ざっていても引数が壊れている
     // 可能性があるため実行せず、途切れたことを明示して打ち切る
     if (finishReason === "length") {
-      console.warn(`[ai] 出力が max_tokens=${MAX_TOKENS} に達して途切れました (loop=${loop})`);
-      messages.push({ role: "assistant", content: (content ?? "") + TRUNCATED_NOTICE });
+      console.warn(`[ai] 出力が max_tokens=${model.max_tokens} に達して途切れました (loop=${loop})`);
+      messages.push({
+        role: "assistant",
+        content: (content ?? "") + TRUNCATED_NOTICE,
+        model: completion.model,
+      });
       return messages;
     }
 
     if (finishReason === "stop") {
       if (content) {
-        messages.push({ role: "assistant", content });
+        messages.push({ role: "assistant", content, model: completion.model });
       }
       return messages;
     }
 
     if (toolCalls.length === 0) {
       if (content) {
-        messages.push({ role: "assistant", content });
+        messages.push({ role: "assistant", content, model: completion.model });
       }
       return messages;
     }
@@ -262,6 +282,7 @@ export async function executeToolCallLoop(
       role: "assistant",
       content: content,
       tool_calls: toolCalls,
+      model: completion.model,
     });
 
     for (const toolCall of toolCalls) {
@@ -298,6 +319,7 @@ export async function executeToolCallLoop(
 
   return finalizeWithoutTools(
     messages,
+    model,
     apiKey,
     baseUrl,
     `ツール呼び出し上限 ${MAX_TOOL_CALLS} 回に到達`,
@@ -346,6 +368,7 @@ async function processAiMessages(
   sessionId: string,
   userMessage: string,
   systemPrompt: string,
+  model: ModelDefinition,
   apiKey: string,
   baseUrl: string,
   bridgeUrl: string,
@@ -360,6 +383,7 @@ async function processAiMessages(
   const resultMessages = await executeToolCallLoop(
     messages,
     TOOL_DEFINITIONS,
+    model,
     apiKey,
     baseUrl,
     createToolExecutor(bridgeUrl, namespace),
@@ -376,6 +400,14 @@ function getLastAssistantReply(resultMessages: ChatMessage[]): string {
     .reverse()
     .find((m) => m.role === "assistant" && m.content);
   return lastAssistant?.content ?? "回答を生成できませんでした。";
+}
+
+/** 最後の回答を実際に生成したモデル ID（ADR-0016）。フォールバックを反映する */
+function getLastAssistantModel(resultMessages: ChatMessage[]): string | undefined {
+  const lastAssistant = [...resultMessages]
+    .reverse()
+    .find((m) => m.role === "assistant" && m.content);
+  return lastAssistant?.model;
 }
 
 export interface AskContext {
@@ -399,10 +431,13 @@ export async function runAsk(
   const deadlineAt = Date.now() + DISCORD_INTERACTION_TTL_MS - DEADLINE_MARGIN_MS;
 
   try {
+    const model = resolveModelDefinition(getDefaultModelId());
+
     const resultMessages = await processAiMessages(
       session.sessionId,
       userMessage,
       getSystemPromptForUser("__discord__"),
+      model,
       ctx.apiKey,
       ctx.baseUrl,
       ctx.bridgeUrl,
@@ -448,15 +483,19 @@ export interface WebAskContext {
 export async function runAskForWeb(
   userMessage: string,
   ctx: WebAskContext,
-): Promise<{ sessionId: string; reply: string }> {
+): Promise<{ sessionId: string; reply: string; model?: string }> {
   const session = getOrCreateWebSession(ctx.userId, ctx.sessionId);
 
   const systemPrompt = getSystemPromptForUser(ctx.userId);
+
+  // Web は利用者別モデル、未設定は既定に従う（ADR-0015）
+  const model = resolveModelDefinition(getUserModelId(ctx.userId));
 
   const resultMessages = await processAiMessages(
     session.sessionId,
     userMessage,
     systemPrompt,
+    model,
     ctx.apiKey,
     ctx.baseUrl,
     ctx.bridgeUrl,
@@ -474,11 +513,12 @@ export async function runAskForWeb(
   }
 
   const reply = getLastAssistantReply(resultMessages);
-  console.log(`[ai] Web応答生成完了: userId=${ctx.userId} session=${session.sessionId}`);
+  const modelUsed = getLastAssistantModel(resultMessages);
+  console.log(`[ai] Web応答生成完了: userId=${ctx.userId} session=${session.sessionId} model=${modelUsed ?? "-"}`);
 
   const rawSessionId = session.sessionId.includes(":session:")
     ? session.sessionId.slice(session.sessionId.lastIndexOf(":session:") + 9)
     : session.sessionId;
 
-  return { sessionId: rawSessionId, reply };
+  return { sessionId: rawSessionId, reply, model: modelUsed };
 }

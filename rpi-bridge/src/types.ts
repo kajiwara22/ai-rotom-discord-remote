@@ -41,6 +41,8 @@ export interface ChatMessage {
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   name?: string;
+  /** このメッセージを生成したモデル ID（ADR-0016）。assistant メッセージに付く */
+  model?: string;
 }
 
 export interface ToolCall {
@@ -59,6 +61,17 @@ export interface ToolDefinition {
     description: string;
     parameters: Record<string, unknown>;
   };
+}
+
+/**
+ * 許可リストに載るモデル定義（ADR-0015）。
+ * reasoning_effort が null のモデルは、chatCompletion でキー自体を送らない。
+ */
+export interface ModelDefinition {
+  /** OpenCode Go へ送る model 値（UI にもそのまま表示） */
+  id: string;
+  reasoning_effort: string | null;
+  max_tokens: number;
 }
 
 export interface MCPToolResult {
@@ -129,6 +142,8 @@ export interface WebAskRequest {
 export interface WebAskResponse {
   session_id: string;
   reply: string;
+  /** 実際に回答を生成したモデル ID（ADR-0016）。junior モードの表示に使う */
+  model?: string;
   /** 3 択クイズ（ADR-0011）。応答に含まれていたときだけ付く */
   quiz?: QuizQuestion[];
 }
@@ -157,6 +172,8 @@ export interface UserInfo {
   /** public/img/avatars/<avatar>.png のファイル名部分 */
   avatar: string;
   mode: UserMode;
+  /** 利用者別モデル（ADR-0015）。null は既定に従う */
+  model: string | null;
 }
 
 export interface SystemPromptInfo {

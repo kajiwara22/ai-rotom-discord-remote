@@ -76,6 +76,7 @@ export function getDb(): Database.Database {
       content TEXT,
       tool_calls_json TEXT,
       tool_call_id TEXT,
+      model TEXT,
       created_at INTEGER NOT NULL,
       FOREIGN KEY (session_id) REFERENCES conversations(session_id) ON DELETE CASCADE
     );
@@ -87,6 +88,9 @@ export function getDb(): Database.Database {
 
   // マイグレーション: conversations に user_id, session_name カラム追加（Web用）
   migrateConversationsTable();
+
+  // マイグレーション: messages に model カラム追加（ADR-0016）
+  migrateMessagesTable();
 
   // Web用テーブル
   db.exec(`
@@ -176,6 +180,19 @@ function extendWebSessionExpiry(): void {
   }
 }
 
+function migrateMessagesTable(): void {
+  const d = db!;
+
+  const existing = d.prepare("PRAGMA table_info(messages)").all() as Array<{ name: string }>;
+  const columnNames = new Set(existing.map((c) => c.name));
+
+  // 回答を生成したモデル ID（ADR-0016）。過去分は NULL のまま
+  if (!columnNames.has("model")) {
+    d.exec("ALTER TABLE messages ADD COLUMN model TEXT");
+    console.log("[db] マイグレーション: messages.model カラム追加");
+  }
+}
+
 function migrateUsersTable(): void {
   const d = db!;
 
@@ -191,6 +208,11 @@ function migrateUsersTable(): void {
   if (!columnNames.has("mode")) {
     d.exec("ALTER TABLE users ADD COLUMN mode TEXT NOT NULL DEFAULT 'kids'");
     console.log("[db] マイグレーション: users.mode カラム追加");
+  }
+  // 利用者別モデル（ADR-0015）。NULL は既定に従う
+  if (!columnNames.has("model")) {
+    d.exec("ALTER TABLE users ADD COLUMN model TEXT");
+    console.log("[db] マイグレーション: users.model カラム追加");
   }
 }
 

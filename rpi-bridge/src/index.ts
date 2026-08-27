@@ -35,7 +35,10 @@ import {
   isParentPinSet,
   setParentPin,
   verifyParentPin,
+  getDefaultModelId,
+  setDefaultModelId,
 } from "./conversation-manager.js";
+import { modelIds, isKnownModel } from "./model-registry.js";
 import { closeDb } from "./db.js";
 import {
   isMatchTool,
@@ -171,6 +174,18 @@ async function main(): Promise<void> {
       return;
     }
 
+    // モデル許可リストと既定モデル（ADR-0015）。UI の選択肢描画に使う
+    if (method === "GET" && url === "/api/models") {
+      try {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ models: modelIds(), default_model: getDefaultModelId() }));
+      } catch (error) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: String(error) }));
+      }
+      return;
+    }
+
     // Web用: ユーザー一覧
     if (method === "GET" && url === "/api/users") {
       try {
@@ -253,6 +268,27 @@ async function main(): Promise<void> {
       return;
     }
 
+    // 保護者用: 既定モデル設定（ADR-0015）
+    if (method === "PUT" && url === "/api/parent/model") {
+      if (rejectIfNotParent(req, res)) return;
+      try {
+        const body = await readBody(req);
+        const { model } = JSON.parse(body) as { model?: string };
+        if (!model || !isKnownModel(model)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "許可リストにないモデルです" }));
+          return;
+        }
+        setDefaultModelId(model);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true, default_model: model }));
+      } catch (error) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: String(error) }));
+      }
+      return;
+    }
+
     // ユーザー情報更新
     // アバターだけの変更は見た目のみなので子ども自身が行える（PIN不要）。
     // 表示名・モードは保護者による設定なので認証を必須にする。
@@ -261,12 +297,19 @@ async function main(): Promise<void> {
       try {
         const userId = decodeURIComponent(userPatchMatch[1]);
         const body = await readBody(req);
-        const { display_name, avatar, mode } = JSON.parse(body);
+        const { display_name, avatar, mode, model } = JSON.parse(body);
 
-        const needsParent = display_name !== undefined || mode !== undefined;
+        // モデルは許可リストから選ぶ。null は「既定に従う」へ戻す（ADR-0015）
+        if (model !== undefined && model !== null && !isKnownModel(model)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "許可リストにないモデルです" }));
+          return;
+        }
+
+        const needsParent = display_name !== undefined || mode !== undefined || model !== undefined;
         if (needsParent && rejectIfNotParent(req, res)) return;
 
-        const user = updateUser(userId, { display_name, avatar, mode });
+        const user = updateUser(userId, { display_name, avatar, mode, model });
         if (!user) {
           res.writeHead(404, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "ユーザーが見つかりません" }));
@@ -623,12 +666,12 @@ async function handleDiscordReset(req: IncomingMessage, res: ServerResponse): Pr
  * `session_id` を前提にしている。ここを素通しすると `session_id` が届かず、
  * 新しいセッション ID がクライアントに渡らないため会話が継続しない。
  */
-function toWebAskResponse(result: { sessionId: string; reply: string }): WebAskResponse {
+function toWebAskResponse(result: { sessionId: string; reply: string; model?: string }): WebAskResponse {
   // クイズの構造は API 境界で本文から切り離す（ADR-0011）。
   // DB には抽出前の原文が残るため、AI は自分が出した問題を覚えたままでいられる
   const { text, quiz } = extractQuiz(result.reply);
-  if (!quiz) return { session_id: result.sessionId, reply: text };
-  return { session_id: result.sessionId, reply: text, quiz };
+  if (!quiz) return { session_id: result.sessionId, reply: text, model: result.model };
+  return { session_id: result.sessionId, reply: text, quiz, model: result.model };
 }
 
 /**

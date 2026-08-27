@@ -1,6 +1,7 @@
 import type { ChatMessage, ConversationSession, SessionInfo, UserInfo, UserMode } from "./types.js";
 import { getSystemPrompt, DISCORD_RESTRICTIONS } from "./tool-definitions.js";
 import { getDb, SESSION_TTL_MS, WEB_SESSION_TTL_MS } from "./db.js";
+import { DEFAULT_MODEL_ID } from "./model-registry.js";
 import crypto from "node:crypto";
 /**
  * LLM へ渡す会話履歴（user / assistant のテキスト）の上限。
@@ -61,12 +62,13 @@ export function getOrCreateSession(channelId: string, guildId?: string): Convers
 export function loadMessages(sessionIdStr: string): ChatMessage[] {
   const db = getDb();
   const rows = db.prepare(
-    "SELECT role, content, tool_call_id, tool_calls_json FROM messages WHERE session_id = ? ORDER BY id ASC",
+    "SELECT role, content, tool_call_id, tool_calls_json, model FROM messages WHERE session_id = ? ORDER BY id ASC",
   ).all(sessionIdStr) as Array<{
     role: string;
     content: string | null;
     tool_call_id: string | null;
     tool_calls_json: string | null;
+    model: string | null;
   }>;
 
   return rows.map((row) => {
@@ -76,6 +78,7 @@ export function loadMessages(sessionIdStr: string): ChatMessage[] {
     };
     if (row.tool_call_id) msg.tool_call_id = row.tool_call_id;
     if (row.tool_calls_json) msg.tool_calls = JSON.parse(row.tool_calls_json);
+    if (row.model) msg.model = row.model;
     return msg;
   });
 }
@@ -87,7 +90,7 @@ export function saveMessages(sessionIdStr: string, messages: ChatMessage[]): voi
   db.prepare("DELETE FROM messages WHERE session_id = ?").run(sessionIdStr);
 
   const insert = db.prepare(
-    "INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls_json, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
   );
 
   // ツール結果は tool-result-formatter.ts で整形済みのため、ここでは切り詰めない
@@ -99,6 +102,7 @@ export function saveMessages(sessionIdStr: string, messages: ChatMessage[]): voi
         msg.content,
         msg.tool_call_id ?? null,
         msg.tool_calls ? JSON.stringify(msg.tool_calls) : null,
+        msg.model ?? null,
         now,
       );
     }
@@ -222,6 +226,7 @@ function rowToUser(row: Record<string, unknown>): UserInfo {
     created_at: row.created_at as number,
     avatar: (row.avatar as string) || DEFAULT_AVATAR,
     mode: normalizeMode(row.mode),
+    model: (row.model as string) ?? null,
   };
 }
 
@@ -235,7 +240,7 @@ export function ensureUser(
   const now = Date.now();
 
   const row = db.prepare(
-    "SELECT user_id, display_name, created_at, avatar, mode FROM users WHERE user_id = ?",
+    "SELECT user_id, display_name, created_at, avatar, mode, model FROM users WHERE user_id = ?",
   ).get(userId) as Record<string, unknown> | undefined;
 
   if (row) {
@@ -257,13 +262,14 @@ export function ensureUser(
     created_at: now,
     avatar: newAvatar,
     mode: newMode,
+    model: null,
   };
 }
 
 export function getUsers(): UserInfo[] {
   const db = getDb();
   const rows = db.prepare(
-    "SELECT user_id, display_name, created_at, avatar, mode FROM users ORDER BY created_at ASC",
+    "SELECT user_id, display_name, created_at, avatar, mode, model FROM users ORDER BY created_at ASC",
   ).all() as Array<Record<string, unknown>>;
 
   return rows.map(rowToUser);
@@ -307,16 +313,16 @@ export function deleteUser(userId: string): boolean {
 export function getUser(userId: string): UserInfo | null {
   const db = getDb();
   const row = db.prepare(
-    "SELECT user_id, display_name, created_at, avatar, mode FROM users WHERE user_id = ?",
+    "SELECT user_id, display_name, created_at, avatar, mode, model FROM users WHERE user_id = ?",
   ).get(userId) as Record<string, unknown> | undefined;
 
   return row ? rowToUser(row) : null;
 }
 
-/** 表示名・アバター・モードの部分更新 */
+/** 表示名・アバター・モード・モデルの部分更新 */
 export function updateUser(
   userId: string,
-  patch: { display_name?: string; avatar?: string; mode?: UserMode },
+  patch: { display_name?: string; avatar?: string; mode?: UserMode; model?: string | null },
 ): UserInfo | null {
   const db = getDb();
   const current = getUser(userId);
@@ -326,13 +332,15 @@ export function updateUser(
     display_name: patch.display_name?.trim() || current.display_name,
     avatar: patch.avatar?.trim() || current.avatar,
     mode: patch.mode ? normalizeMode(patch.mode) : current.mode,
+    // model は null で「既定に従う」へ戻す（ADR-0015）。undefined は変更なし
+    model: patch.model === undefined ? current.model : (patch.model || null),
   };
 
   db.prepare(
-    "UPDATE users SET display_name = ?, avatar = ?, mode = ? WHERE user_id = ?",
-  ).run(next.display_name, next.avatar, next.mode, userId);
+    "UPDATE users SET display_name = ?, avatar = ?, mode = ?, model = ? WHERE user_id = ?",
+  ).run(next.display_name, next.avatar, next.mode, next.model, userId);
 
-  console.log(`[conversation] ユーザー更新: ${userId} (avatar=${next.avatar}, mode=${next.mode})`);
+  console.log(`[conversation] ユーザー更新: ${userId} (avatar=${next.avatar}, mode=${next.mode}, model=${next.model ?? "既定"})`);
 
   return { ...current, ...next };
 }
@@ -522,6 +530,30 @@ export function setSystemPromptForUser(userId: string, promptText: string): void
   ).run(userId, promptText, now, promptText, now);
 
   console.log(`[conversation] システムプロンプト更新: user=${userId} (${promptText.length} chars)`);
+}
+
+// ========== モデル選択（ADR-0015 / ADR-0016） ==========
+
+const DEFAULT_MODEL_KEY = "default_model";
+
+/** 既定モデル ID（Discord と、モデル未設定の Web ユーザーが従う） */
+export function getDefaultModelId(): string {
+  return getSetting(DEFAULT_MODEL_KEY) ?? DEFAULT_MODEL_ID;
+}
+
+/** 既定モデルの保存。許可リストに無い ID は呼び出し側で弾くこと */
+export function setDefaultModelId(id: string): void {
+  setSetting(DEFAULT_MODEL_KEY, id);
+  console.log(`[conversation] 既定モデル更新: ${id}`);
+}
+
+/** 利用者別モデル ID。未設定（null）は既定に従う */
+export function getUserModelId(userId: string): string | null {
+  const db = getDb();
+  const row = db.prepare(
+    "SELECT model FROM users WHERE user_id = ?",
+  ).get(userId) as { model: string | null } | undefined;
+  return row?.model ?? null;
 }
 
 export function updateSessionName(sessionId: string, name: string): void {

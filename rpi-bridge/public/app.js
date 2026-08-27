@@ -77,6 +77,8 @@
       parentSettings: "おうちの人の せってい",
       pinNote: "4けたの あんしょうばんごう を いれてください",
       modeLabel: "つかう人の モード",
+      modelDefault: "ぜんたいの モデル",
+      modelFollowDefault: "いつもの モデル",
       promptLabel: "AI の せいかく（システムプロンプト）",
       promptUser: "だれの ぶん？",
       promptNote: "この せいかくは えらんだ人だけに つかわれます。からっぽ にすると みんな共通の さいしょの せってい に もどります。",
@@ -157,6 +159,8 @@
       parentSettings: "設定（保護者向け）",
       pinNote: "4桁の暗証番号を入力してください",
       modeLabel: "ユーザーごとの表示モード",
+      modelDefault: "既定のモデル",
+      modelFollowDefault: "既定に従う",
       promptLabel: "AI の性格（システムプロンプト）",
       promptUser: "対象ユーザー",
       promptNote: "この性格は選択したユーザーにのみ適用されます。空欄にすると全員共通の初期設定に戻ります。",
@@ -203,6 +207,8 @@
   let currentSessionId = null;
   let sending = false;
   let parentToken = null;
+  let modelList = [];
+  let defaultModelId = null;
   let timer = null;
   /** 送信中の AbortController。中止ボタンが使う */
   let currentAbort = null;
@@ -407,6 +413,13 @@
     if (!Array.isArray(users)) users = [];
   }
 
+  /** モデル許可リストと既定モデル（ADR-0015）。設定画面を開くたびに取り直す */
+  async function loadModels() {
+    const d = await api("/api/models");
+    modelList = Array.isArray(d.models) ? d.models : [];
+    defaultModelId = d.default_model || null;
+  }
+
   /* ---------- セッション ---------- */
   async function loadSessions() {
     if (!currentUser) return;
@@ -553,7 +566,7 @@
       els.inner.innerHTML = "";
       (Array.isArray(msgs) ? msgs : []).forEach((m) => {
         if (m.role === "user") appendMessage("user", m.content);
-        else if (m.role === "assistant" && m.content) appendMessage("assistant", m.content);
+        else if (m.role === "assistant" && m.content) appendMessage("assistant", m.content, m.model);
       });
       scrollBottom();
     } catch (e) {
@@ -587,7 +600,7 @@
     els.inner.appendChild(wrap);
   }
 
-  function appendMessage(role, content) {
+  function appendMessage(role, content, model) {
     const d = t();
     const el = document.createElement("div");
     el.className = "msg msg-" + role;
@@ -597,8 +610,17 @@
       '<div class="avatar"><img alt=""></div>' +
       '<div class="col"><div class="who"></div><div class="bubble"></div></div>';
     el.querySelector(".avatar img").src = av;
-    el.querySelector(".who").textContent =
+    const who = el.querySelector(".who");
+    who.textContent =
       role === "user" ? (currentUser ? currentUser.display_name : "") : d.aiName;
+
+    // モデル名は junior のみ表示（ADR-0016）。kids には出さない
+    if (role === "assistant" && model && currentUser && currentUser.mode === "junior") {
+      const tag = document.createElement("span");
+      tag.className = "msg-model";
+      tag.textContent = model;
+      who.appendChild(tag);
+    }
 
     const bubble = el.querySelector(".bubble");
     if (role === "assistant") {
@@ -936,7 +958,7 @@
         opts.acceptQuiz !== false && Array.isArray(data.quiz) && data.quiz.length > 0;
       // 前置きなしでクイズだけ返ってきたときに、空の吹き出しを出さない
       if (reply.trim() || !hasQuiz) {
-        appendMessage("assistant", reply || "（回答がありませんでした）");
+        appendMessage("assistant", reply || "（回答がありませんでした）", data.model);
       }
       if (hasQuiz) startQuiz(data.quiz);
       scrollBottom();
@@ -1025,7 +1047,9 @@
   async function openSettings() {
     // 他の端末で追加されたユーザーも反映されるよう開くたびに取り直す
     try { await loadUsers(); } catch (e) { /* 取得できなければ手元の一覧を使う */ }
+    try { await loadModels(); } catch (e) { /* 取得できなければ既定のまま */ }
 
+    renderDefaultModel();
     renderModeList();
     syncSeg("#theme-seg", "theme", root.getAttribute("data-theme") || "auto");
     $("#new-pin").value = "";
@@ -1040,8 +1064,22 @@
     $("#settings-dialog").showModal();
   }
 
+  function renderDefaultModel() {
+    const sel = $("#default-model");
+    if (!sel) return;
+    sel.innerHTML = "";
+    modelList.forEach((mid) => {
+      const o = document.createElement("option");
+      o.value = mid;
+      o.textContent = mid;
+      sel.appendChild(o);
+    });
+    sel.value = defaultModelId || "";
+  }
+
   function renderModeList() {
     const wrap = $("#mode-list");
+    const d = t();
     wrap.innerHTML = "";
 
     users.forEach((u) => {
@@ -1054,6 +1092,7 @@
         '<button type="button" data-m="kids">キッズ</button>' +
         '<button type="button" data-m="junior">ジュニア</button>' +
         "</div>" +
+        '<select class="modelSel" title="モデル"></select>' +
         '<button type="button" class="delUserBtn" title="このユーザーを削除">' +
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>' +
         "</button>";
@@ -1096,6 +1135,38 @@
             toast(e.message);
           }
         });
+      });
+
+      // モデル選択（ADR-0015）。未設定（null）は「既定に従う」
+      const modelSel = row.querySelector(".modelSel");
+      const optDefault = document.createElement("option");
+      optDefault.value = "";
+      optDefault.textContent = d.modelFollowDefault;
+      modelSel.appendChild(optDefault);
+      modelList.forEach((mid) => {
+        const o = document.createElement("option");
+        o.value = mid;
+        o.textContent = mid;
+        modelSel.appendChild(o);
+      });
+      modelSel.value = u.model || "";
+      modelSel.addEventListener("change", async () => {
+        const prev = u.model;
+        const v = modelSel.value || null;
+        u.model = v;
+        try {
+          await api("/api/users/" + encodeURIComponent(u.user_id), {
+            method: "PATCH",
+            body: JSON.stringify({ model: v }),
+          });
+          if (currentUser && u.user_id === currentUser.user_id) {
+            currentUser.model = v;
+          }
+        } catch (e) {
+          u.model = prev;
+          modelSel.value = prev || "";
+          toast(e.message);
+        }
       });
 
       wrap.appendChild(row);
@@ -1264,6 +1335,19 @@
         try { localStorage.setItem("ai-rotom-theme", v); } catch (e) { /* ignore */ }
         syncSeg("#theme-seg", "theme", v);
       });
+    });
+
+    $("#default-model").addEventListener("change", async (e) => {
+      const v = e.target.value;
+      if (!v) return;
+      try {
+        await api("/api/parent/model", { method: "PUT", body: JSON.stringify({ model: v }) });
+        defaultModelId = v;
+        toast(t().saved);
+      } catch (err) {
+        e.target.value = defaultModelId || "";
+        toast(err.message);
+      }
     });
 
     // 編集対象ユーザーの切り替え（編集途中の内容は保持する）

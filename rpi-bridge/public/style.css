@@ -283,6 +283,15 @@ button { font: inherit; color: inherit; }
 .msg .col { min-width: 0; max-width: min(100%, 700px); }
 .msg .who { font-size: .74rem; color: var(--text-mute); margin: 0 0 4px 8px; font-weight: 700; }
 :root[data-mode="junior"] .msg .who { font-size: .7rem; font-weight: 600; margin-bottom: 2px; }
+/* 回答を生成したモデル名（ADR-0016）。junior のみ表示 */
+.msg-model {
+  display: inline-block; margin-left: 6px; padding: 1px 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .62rem; font-weight: 600; letter-spacing: .01em;
+  color: var(--text-mute); background: rgba(0,0,0,.05);
+  border-radius: 6px; vertical-align: 1px;
+}
+:root[data-mode="junior"] .msg-model { font-size: .58rem; }
 .bubble {
   padding: var(--bubble-pad);
   border-radius: var(--radius);
@@ -607,6 +616,23 @@ dialog textarea { min-height: 180px; line-height: 1.6; font-size: .9rem; resize:
 .segment button.on { border-color: var(--rotom-cyan); background: rgba(41,182,224,.16); }
 .fieldlabel { font-weight: 700; font-size: .88rem; margin: 16px 0 8px; }
 
+/* 既定モデルの選択（ADR-0015）。設定ダイアログの全体設定 */
+.model-select {
+  width: 100%; min-height: 40px; padding: 0 10px;
+  font: inherit; font-size: .92rem; font-weight: 700;
+  color: var(--text); background: var(--screen-bg);
+  border: 2px solid var(--line); border-radius: 12px;
+}
+:root[data-mode="junior"] .model-select { border-width: 1px; }
+
+/* 利用者ごとのモデル選択（modeRow 内） */
+.modeRow .modelSel {
+  flex: 0 0 auto; min-height: 36px; max-width: 150px; padding: 0 6px;
+  font: inherit; font-size: .76rem; font-weight: 600;
+  color: var(--text); background: var(--screen-bg);
+  border: 2px solid var(--line); border-radius: 10px;
+}
+
 .modeRow {
   display: flex; align-items: center; gap: 10px;
   padding: 8px 0; border-bottom: 1px solid var(--line);
@@ -618,6 +644,7 @@ dialog textarea { min-height: 180px; line-height: 1.6; font-size: .9rem; resize:
 @media (max-width: 480px) {
   .modeRow { flex-wrap: wrap; }
   .modeRow .segment { flex: 1 0 100%; }
+  .modeRow .modelSel { flex: 1 0 100%; max-width: none; }
 }
 
 /* アイコン変更ボタン: 押せると分かるよう枠とペンのバッジを出す */
