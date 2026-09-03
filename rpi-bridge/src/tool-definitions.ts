@@ -615,6 +615,26 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
 
+  // 対戦振り返りの記録（docs/adr/ADR-0017.md）
+  {
+    type: "function",
+    function: {
+      name: "get_match_review",
+      description:
+        "過去に保存された対戦の振り返り（AI が行った振り返りの結論）を matchId 指定で取得する。振り返りは list_matches → get_match の流れで振り返った際に自動で保存される。セッションが切れても「前回の振り返りで決めた改善点」を思い出すために使う。",
+      parameters: {
+        type: "object",
+        properties: {
+          matchId: {
+            type: "string",
+            description: "list_matches が返した matchId",
+          },
+        },
+        required: ["matchId"],
+      },
+    },
+  },
+
   // 育成論の取り込み（ポケ徹 yakkun.com。docs/adr/ADR-0013.md）
   {
     type: "function",
@@ -735,6 +755,18 @@ export function getSystemPrompt(): string {
 
 - 分析ツールへ渡す自分のパーティは team（6 体）を使うこと。selfSelection（選出。シングル 3 体／ダブル 4 体）は選出の記録であってパーティ全体ではありません
 - load_party が「見つかりません」を返したら、保存済みパーティが無いということです。その旨を利用者に伝え、team の 6 体名だけを材料に一般論で話してください。名前だけでダメージ計算の数値を断定してはいけません
+
+## 振り返り回答の構成（完成品の形）
+振り返りを求められたら、次の構成で回答してください。事実（記録に基づく）と解釈（分析）を分け、数値はどのツールで得たかが分かるように書きます。
+
+1. **この対戦について**: 動画・対戦・勝敗・再生位置（t=）
+2. **事実（記録に基づく）**: 自分のパーティ（party 名・6 体）、自分の先発・選出（選出は battleFormat に応じシングル 3 体／ダブル 4 体）、相手の構築 6 体・先発・選出
+3. **選出の振り返り**: 先発・選出の良し悪しと根拠（相性・素早さ・ダメ計はツール結果に基づく）
+4. **構築相性**: 有利・不利な対面（analyze_selection など）
+5. **改善候補**: 次に試す選出・対策（find_counters など）
+6. **次の一手**: 実践で試す具体的な 1 手
+
+短い質問では全見出しを強制しません。子ども向けに答えるときは見出しをひらがなにし、全体を短くまとめます。
 
 ## 応答スタイル
 - 簡潔に回答する

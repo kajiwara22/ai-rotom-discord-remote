@@ -21,6 +21,15 @@ import {
 } from "./conversation-manager.js";
 import { editOriginalResponse } from "./discord-webhook.js";
 import { resolveModelDefinition, DEFAULT_MODEL_ID } from "./model-registry.js";
+import {
+  isReviewTurn,
+  extractMatchId,
+  inspectReview,
+  buildEvaluatorMessages,
+  parseVerdict,
+  buildRevisionMessages,
+} from "./review-harness.js";
+import { saveMatchReview, buildMatchReview } from "./match-reviews.js";
 
 // モデル・reasoning_effort・max_tokens は model-registry.ts のモデル定義に移した
 // （ADR-0015）。理由: モデル名だけ差し替えると unknown の reasoning_effort が
@@ -40,6 +49,14 @@ const TOOL_TIMEOUT_MS = 60_000;
  */
 const DISCORD_INTERACTION_TTL_MS = 15 * 60 * 1000;
 const DEADLINE_MARGIN_MS = 3 * 60 * 1000;
+
+/**
+ * 評価役 LLM を起動してよい残り時間の目安（ADR-0017）。
+ * 評価役 + 書き直しで最大 2 回の LLM 呼び出しが入るため、締切の直近では
+ * 検品を飛ばして、集めた情報で回答を届けることを優先する。
+ */
+const EVALUATOR_MARGIN_MS = 3 * 60 * 1000;
+const REVISION_MARGIN_MS = 60 * 1000;
 
 const TRUNCATED_NOTICE =
   "\n\n---\n（回答が長くなりすぎたため、ここで途切れています。「続き」と聞くと続きから答えます）";
@@ -364,6 +381,101 @@ function createToolExecutor(bridgeUrl: string, namespace: string) {
   };
 }
 
+/** 最後の assistant 本文（最終回答）の位置。無ければ -1 */
+function findLastAssistantReplyIndex(messages: ChatMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "assistant" && messages[i].content) return i;
+  }
+  return -1;
+}
+
+/**
+ * 対戦振り返りの検品と記録（ADR-0017）。
+ *
+ * 振り返りターン（list_matches / get_match を呼んだターン）に限って、
+ * 機械的検品 → 評価役 LLM（必要なら 1 回だけ書き直し）→ match_reviews へ保存
+ * の順で処理する。検品で会話を止めない（ADR-0011 と同じ方針）。
+ */
+async function applyReviewHarness(
+  messages: ChatMessage[],
+  model: ModelDefinition,
+  apiKey: string,
+  baseUrl: string,
+  deadlineAt?: number,
+): Promise<ChatMessage[]> {
+  if (!isReviewTurn(messages)) return messages;
+
+  const replyIndex = findLastAssistantReplyIndex(messages);
+  if (replyIndex < 0) return messages;
+
+  const draft = messages[replyIndex].content ?? "";
+  const mechanicalIssues = inspectReview(draft, messages);
+  if (mechanicalIssues.length > 0) {
+    console.warn(`[review] 機械的検品で ${mechanicalIssues.length} 件の指摘:`, mechanicalIssues);
+  }
+
+  // 評価役 LLM。締切の直近では飛ばして、回答を届けることを優先する
+  let revised = draft;
+  const canEvaluate = deadlineAt === undefined || Date.now() < deadlineAt - EVALUATOR_MARGIN_MS;
+  if (canEvaluate) {
+    try {
+      const verdictResult = await chatCompletion(
+        buildEvaluatorMessages(draft, messages, mechanicalIssues),
+        [],
+        model,
+        apiKey,
+        baseUrl,
+      );
+      const verdict = verdictResult.content ? parseVerdict(verdictResult.content) : null;
+      if (verdict && !verdict.pass) {
+        console.warn(`[review] 評価役が不合格と判定。1 回だけ書き直します:`, verdict.issues);
+        const canRevise = deadlineAt === undefined || Date.now() < deadlineAt - REVISION_MARGIN_MS;
+        if (canRevise) {
+          const revisionResult = await chatCompletion(
+            buildRevisionMessages(draft, verdict.issues),
+            [],
+            model,
+            apiKey,
+            baseUrl,
+          );
+          if (revisionResult.content) revised = revisionResult.content;
+        } else {
+          console.warn("[review] 締切が近いため書き直しを省略します");
+        }
+      } else if (verdict) {
+        console.log("[review] 評価役の検品に合格");
+      } else {
+        console.warn("[review] 評価役の返答を解釈できませんでした。元の回答で続行します");
+      }
+    } catch (error) {
+      console.error("[review] 評価役の呼び出しに失敗しました。元の回答で続行します:", error);
+    }
+  }
+
+  // 機械的検品の指摘は「削る」より「注記」で伝える（ADR-0017）
+  let finalReply = revised;
+  if (mechanicalIssues.length > 0) {
+    finalReply =
+      revised +
+      "\n\n---\n（振り返りの確認メモ）\n" +
+      mechanicalIssues.map((x) => `- ${x}`).join("\n");
+  }
+  messages[replyIndex] = { ...messages[replyIndex], content: finalReply };
+
+  // 記録: get_match で特定できた対戦を保存（注記を除いた本文を残す）
+  const matchId = extractMatchId(messages);
+  if (matchId !== undefined) {
+    try {
+      saveMatchReview(buildMatchReview(matchId, revised));
+      console.log(`[review] 振り返りを保存: ${matchId}`);
+    } catch (error) {
+      console.error("[review] 振り返りの保存に失敗しました:", error);
+    }
+  }
+
+  return messages;
+}
+
 async function processAiMessages(
   sessionId: string,
   userMessage: string,
@@ -391,8 +503,17 @@ async function processAiMessages(
     onProgress,
   );
 
-  saveMessages(sessionId, resultMessages);
-  return resultMessages;
+  // 対戦振り返りターンは検品と記録を挟む（ADR-0017）
+  const reviewedMessages = await applyReviewHarness(
+    resultMessages,
+    model,
+    apiKey,
+    baseUrl,
+    deadlineAt,
+  );
+
+  saveMessages(sessionId, reviewedMessages);
+  return reviewedMessages;
 }
 
 function getLastAssistantReply(resultMessages: ChatMessage[]): string {

@@ -135,6 +135,18 @@ export function getDb(): Database.Database {
     );
   `);
 
+  // 対戦振り返りの記録（ADR-0017）。matchId をキーに検品済みの振り返りを残す。
+  // 原文（review_text）を必ず残し、改善候補・次の一手はベストエフォートで抜き出す
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS match_reviews (
+      match_id TEXT PRIMARY KEY,
+      review_text TEXT NOT NULL,
+      improvements TEXT,
+      next_action TEXT,
+      reviewed_at INTEGER NOT NULL
+    );
+  `);
+
   console.log(`[db] SQLite 初期化完了: ${dbPath}`);
   return db;
 }

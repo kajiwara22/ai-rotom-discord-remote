@@ -47,6 +47,7 @@ import {
 } from "./match-repository.js";
 import { isTheoryTool, executeTheoryTool } from "./theory-import.js";
 import { isRankingTool, executeRankingTool } from "./ranking.js";
+import { isReviewTool, executeReviewTool } from "./match-reviews.js";
 
 const PORT = parseInt(process.env.PORT ?? "3210", 10);
 const HOST = process.env.HOST ?? "127.0.0.1";
@@ -572,6 +573,19 @@ async function handleToolCall(
     // 使用率ランキング（ADR-0014）。同じく bridge 側で処理する
     if (isRankingTool(toolName)) {
       const text = await executeRankingTool(toolName, args);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          success: true,
+          result: { content: [{ type: "text", text }] },
+        }),
+      );
+      return;
+    }
+
+    // 対戦振り返りの記録（ADR-0017）。同じく bridge 側で処理する
+    if (isReviewTool(toolName)) {
+      const text = await executeReviewTool(toolName, args);
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(
         JSON.stringify({

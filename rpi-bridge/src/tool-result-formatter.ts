@@ -18,6 +18,8 @@ const PASSTHROUGH_LIMIT = 5000;
 const HARD_LIMIT = 6000;
 /** 育成論の考察本文を LLM に渡す上限。本文は DB には全文残る（ADR-0013） */
 const THEORY_BODY_LIMIT = 4800;
+/** 振り返り本文を LLM に渡す上限。本文は DB には全文残る（ADR-0017） */
+const REVIEW_TEXT_LIMIT = 4800;
 
 /** ダメージ計算結果 1 件（outgoing / incoming / results の要素） */
 interface DamageEntry {
@@ -277,6 +279,18 @@ const FORMATTERS: Record<string, Formatter> = {
   // 構造化ヘッダ（性格・特性・持ち物・SP・技）は切らない（ADR-0013）
   import_theory_from_url: boundTheoryBody,
   get_theory: boundTheoryBody,
+
+  // 振り返り本文は prose なので JSON 構造は壊れない。改善候補・次の一手の
+  // 構造化フィールドはそのまま残し、本文だけを上限で区切る（ADR-0017）
+  get_match_review: (d) => {
+    const reviewText = typeof d.review_text === "string" ? d.review_text : "";
+    if (reviewText.length <= REVIEW_TEXT_LIMIT) return d;
+    return {
+      ...d,
+      review_text: reviewText.slice(0, REVIEW_TEXT_LIMIT),
+      note: `振り返り本文は全 ${reviewText.length} 字。先頭 ${REVIEW_TEXT_LIMIT} 字のみ表示（後半は省略）`,
+    };
+  },
 };
 
 /**
