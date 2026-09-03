@@ -196,6 +196,17 @@ function presentOrUndefined(list: string[] | undefined): string[] | undefined {
 }
 
 /**
+ * battleFormat に応じた選出・先発の体数（ADR-0018）。
+ * シングルは選出 3 体・先発 1 体、ダブルは選出 4 体・先発 2 体。
+ * 未知の値はダブル扱いで fallback する（現状の記録はダブル中心のため）。
+ */
+function selectionAndLeadSize(battleFormat: string): { selection: number; lead: number } {
+  return battleFormat === "single" || battleFormat === "singles"
+    ? { selection: 3, lead: 1 }
+    : { selection: 4, lead: 2 };
+}
+
+/**
  * 1 つの動画に含まれる対戦の一覧。
  *
  * 応答は 1 動画に閉じている。全件を横断して返す形に変えると、
@@ -276,12 +287,13 @@ export async function getMatch(matchId: string): Promise<unknown> {
   }
 
   const row = rows[0];
+  const { selection: selectionCount, lead: leadCount } = selectionAndLeadSize(row.battleFormat);
   const notes = [
     "この記録に技・ダメージ・ターン推移は含まれない。選出フェーズまでを扱うこと",
-    "team はこの対戦で使ったパーティ 6 体、party はそのパーティ名。分析ツール（analyze_selection など）で振り返る前に、まず load_party に party を渡して持ち物・技・性格・SP を取得すること。名前だけを渡すと SP=0・持ち物なしとして計算され、実戦と違う結論になる。分析には team（6 体）を使い、selfSelection（選出 4 体）をパーティ全体と混同しないこと",
+    `team はこの対戦で使ったパーティ 6 体、party はそのパーティ名。分析ツール（analyze_selection など）で振り返る前に、まず load_party に party を渡して持ち物・技・性格・SP を取得すること。名前だけを渡すと SP=0・持ち物なしとして計算され、実戦と違う結論になる。分析には team（6 体）を使い、selfSelection（選出 ${selectionCount} 体）をパーティ全体と混同しないこと`,
   ];
   if (presentOrUndefined(row.opponentSelection) === undefined) {
-    notes.push("相手の選出 4 体は未記録。相手について分かるのは構築 6 体と先発 2 体のみ");
+    notes.push(`相手の選出 ${selectionCount} 体は未記録。相手について分かるのは構築 6 体と先発 ${leadCount} 体のみ`);
   }
 
   return {
