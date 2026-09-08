@@ -30,6 +30,22 @@ import {
   buildRevisionMessages,
 } from "./review-harness.js";
 import { saveMatchReview, buildMatchReview } from "./match-reviews.js";
+import crypto from "node:crypto";
+
+/**
+ * OpenCode Go が要求する x-opencode-session ヘッダーの値。
+ *
+ * 会話ごとの安定したセッション ID を送ることで、ルーティング最適化と
+ * プロンプトキャッシュが効く（https://opencode.ai/docs/go/）。会話のたびに
+ * 変えず、会話をまたいで同じ値を使い回さないことが要件。
+ *
+ * 内部の sessionId は Discord のチャンネル ID や Web のユーザー ID を含むため、
+ * そのまま第三者へ送らず一方向ハッシュに変換する。ハッシュは会話ごとに安定する
+ * ため、安定 ID の要件は崩れない。
+ */
+function opencodeSessionHeader(sessionId: string): string {
+  return crypto.createHash("sha256").update(sessionId).digest("hex");
+}
 
 // モデル・reasoning_effort・max_tokens は model-registry.ts のモデル定義に移した
 // （ADR-0015）。理由: モデル名だけ差し替えると unknown の reasoning_effort が
@@ -103,6 +119,7 @@ export async function chatCompletion(
   model: ModelDefinition,
   apiKey: string,
   baseUrl: string,
+  sessionId: string,
 ): Promise<ChatCompletionResult> {
   // tools が空のときはフィールドごと省く。空配列を受け付けない API 実装があるため
   // reasoning_effort も null のモデルではキー自体を省く（推論非対応モデル用）
@@ -130,6 +147,7 @@ export async function chatCompletion(
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${apiKey}`,
+        "x-opencode-session": opencodeSessionHeader(sessionId),
       },
       body: payload,
       signal: AbortSignal.timeout(API_TIMEOUT_MS),
@@ -179,6 +197,7 @@ async function finalizeWithoutTools(
   model: ModelDefinition,
   apiKey: string,
   baseUrl: string,
+  sessionId: string,
   reason: string,
   fallbackNotice: string,
 ): Promise<ChatMessage[]> {
@@ -186,7 +205,7 @@ async function finalizeWithoutTools(
 
   try {
     const { content, finishReason, model: actualModel } =
-      await chatCompletion(messages, [], model, apiKey, baseUrl);
+      await chatCompletion(messages, [], model, apiKey, baseUrl, sessionId);
     if (content) {
       messages.push({
         role: "assistant",
@@ -209,6 +228,7 @@ export async function executeToolCallLoop(
   model: ModelDefinition,
   apiKey: string,
   baseUrl: string,
+  sessionId: string,
   executeTool: (name: string, args: Record<string, unknown>) => Promise<string>,
   deadlineAt?: number,
   onProgress?: (progress: ToolProgress) => void,
@@ -223,6 +243,7 @@ export async function executeToolCallLoop(
         model,
         apiKey,
         baseUrl,
+        sessionId,
         `締切超過 loop=${loop}`,
         "調べている途中で時間切れになりました。質問を絞ってもう一度聞いてください。",
       );
@@ -230,7 +251,7 @@ export async function executeToolCallLoop(
 
     let completion: ChatCompletionResult;
     try {
-      completion = await chatCompletion(messages, tools, model, apiKey, baseUrl);
+      completion = await chatCompletion(messages, tools, model, apiKey, baseUrl, sessionId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const hasToolResults = messages.some((m) => m.role === "tool");
@@ -248,6 +269,7 @@ export async function executeToolCallLoop(
           fallback,
           apiKey,
           baseUrl,
+          sessionId,
           `API 呼び出し失敗 loop=${loop}: ${message}`,
           "調べている途中で応答が返らなくなりました。もう一度聞いてください。",
         );
@@ -263,6 +285,7 @@ export async function executeToolCallLoop(
         model,
         apiKey,
         baseUrl,
+        sessionId,
         `API 呼び出し失敗 loop=${loop}: ${message}`,
         "調べている途中で応答が返らなくなりました。もう一度聞いてください。",
       );
@@ -339,6 +362,7 @@ export async function executeToolCallLoop(
     model,
     apiKey,
     baseUrl,
+    sessionId,
     `ツール呼び出し上限 ${MAX_TOOL_CALLS} 回に到達`,
     "調べることが多すぎて、まとめきれませんでした。質問を分けてもう一度聞いてください。",
   );
@@ -401,6 +425,7 @@ async function applyReviewHarness(
   model: ModelDefinition,
   apiKey: string,
   baseUrl: string,
+  sessionId: string,
   deadlineAt?: number,
 ): Promise<ChatMessage[]> {
   if (!isReviewTurn(messages)) return messages;
@@ -425,6 +450,7 @@ async function applyReviewHarness(
         model,
         apiKey,
         baseUrl,
+        sessionId,
       );
       const verdict = verdictResult.content ? parseVerdict(verdictResult.content) : null;
       if (verdict && !verdict.pass) {
@@ -437,6 +463,7 @@ async function applyReviewHarness(
             model,
             apiKey,
             baseUrl,
+            sessionId,
           );
           if (revisionResult.content) revised = revisionResult.content;
         } else {
@@ -498,6 +525,7 @@ async function processAiMessages(
     model,
     apiKey,
     baseUrl,
+    sessionId,
     createToolExecutor(bridgeUrl, namespace),
     deadlineAt,
     onProgress,
@@ -509,6 +537,7 @@ async function processAiMessages(
     model,
     apiKey,
     baseUrl,
+    sessionId,
     deadlineAt,
   );
 
