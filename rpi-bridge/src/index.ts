@@ -58,6 +58,17 @@ const BRIDGE_URL = process.env.BRIDGE_URL ?? `http://127.0.0.1:${PORT}`;
 /** PIN 未設定時に使う初期 PIN。初回起動後に設定画面から変更できる */
 const DEFAULT_PARENT_PIN = process.env.PARENT_PIN ?? "1234";
 
+/**
+ * ai-rotom MCP サーバーの起動方式（ADR-0019）。
+ * 既定は npx で npm の latest を解決する。未リリース版（ローカルビルド）を
+ * 使う場合は AI_ROTOM_COMMAND=node、
+ * AI_ROTOM_ARGS=/path/to/ai-rotom/packages/mcp-server/dist/index.mjs を設定する。
+ */
+const AI_ROTOM_COMMAND = process.env.AI_ROTOM_COMMAND ?? "npx";
+const AI_ROTOM_ARGS = (process.env.AI_ROTOM_ARGS ?? "-y @nonz250/ai-rotom")
+  .split(/\s+/)
+  .filter((arg) => arg.length > 0);
+
 // ========== 保護者セッション（メモリ保持） ==========
 const PARENT_TOKEN_TTL_MS = 30 * 60 * 1000;
 const parentTokens = new Map<string, number>();
@@ -95,6 +106,7 @@ function rejectIfNotParent(req: IncomingMessage, res: ServerResponse): boolean {
 
 async function main(): Promise<void> {
   console.log("ai-rotom MCP Bridge 起動中...");
+  console.log(`[ai-rotom] 起動方式: ${AI_ROTOM_COMMAND} ${AI_ROTOM_ARGS.join(" ")}`);
 
   const client = new Client(
     { name: "ai-rotom-bridge", version: "0.1.0" },
@@ -102,8 +114,8 @@ async function main(): Promise<void> {
   );
 
   const transport = new StdioClientTransport({
-    command: "npx",
-    args: ["-y", "@nonz250/ai-rotom"],
+    command: AI_ROTOM_COMMAND,
+    args: AI_ROTOM_ARGS,
   });
 
   await client.connect(transport);

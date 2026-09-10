@@ -326,6 +326,8 @@ npx wrangler secret put ALLOWED_CHANNEL_IDS
 | `OPENCODE_GO_API_KEY` | OpenCode Go API キー | **(必須)** |
 | `OPENCODE_GO_BASE_URL` | API ベース URL | `https://opencode.ai/zen/go/v1` |
 | `BRIDGE_URL` | ツール実行用内部 URL | `http://127.0.0.1:3210` |
+| `AI_ROTOM_COMMAND` | ai-rotom MCP サーバーの起動コマンド（ADR-0019） | `npx` |
+| `AI_ROTOM_ARGS` | 起動引数（空白区切り）。未リリース main のローカルビルドを使う場合は `node` と `dist/index.mjs` のパスを指定 | `-y @nonz250/ai-rotom` |
 | `PARENT_PIN` | Web UI 保護者設定の初期 PIN（数字4桁） | `1234` |
 | `WEB_SESSION_TTL_DAYS` | Web チャット履歴の保持日数（Discord は 30分固定） | `30` |
 | `R2_ENDPOINT_URL` | 対戦記録を置いた R2 のエンドポイント（`https://` の有無は問わない） | (未設定なら振り返り機能のみ無効) |
