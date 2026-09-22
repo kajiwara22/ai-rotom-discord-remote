@@ -15,6 +15,7 @@ import type {
   WebResetRequest,
 } from "./types.js";
 import { extractQuiz, renderStoredReply } from "./quiz-block.js";
+import { stripDsml } from "./dsml.js";
 import { runAsk, runAskForWeb } from "./ai-service.js";
 import {
   deleteExpiredSessions,
@@ -40,21 +41,15 @@ import {
 } from "./conversation-manager.js";
 import { modelIds, isKnownModel } from "./model-registry.js";
 import { closeDb } from "./db.js";
-import {
-  isMatchTool,
-  executeMatchTool,
-  closeMatchRepository,
-} from "./match-repository.js";
-import { isTheoryTool, executeTheoryTool } from "./theory-import.js";
-import { isRankingTool, executeRankingTool } from "./ranking.js";
-import { isReviewTool, executeReviewTool } from "./match-reviews.js";
+import { closeMatchRepository } from "./match-repository.js";
+import { createExecuteRaw, createRunTool, type ExecuteRaw, type RunTool } from "./tool-runner.js";
+import { webNamespace } from "./party-namespace.js";
 
 const PORT = parseInt(process.env.PORT ?? "3210", 10);
 const HOST = process.env.HOST ?? "127.0.0.1";
 const BIND_HOST = process.env.BIND_HOST ?? HOST;
 const OPENCODE_GO_API_KEY = process.env.OPENCODE_GO_API_KEY ?? "";
 const OPENCODE_GO_BASE_URL = process.env.OPENCODE_GO_BASE_URL ?? "https://opencode.ai/zen/go/v1";
-const BRIDGE_URL = process.env.BRIDGE_URL ?? `http://127.0.0.1:${PORT}`;
 /** PIN 未設定時に使う初期 PIN。初回起動後に設定画面から変更できる */
 const DEFAULT_PARENT_PIN = process.env.PARENT_PIN ?? "1234";
 
@@ -121,6 +116,10 @@ async function main(): Promise<void> {
   await client.connect(transport);
   console.log("ai-rotom MCP サーバーに接続しました");
 
+  // 共有実行層（ADR-0020）。整形＋名前空間込みの実行と、生の実行の2口を用意する
+  const executeRaw = createExecuteRaw(client);
+  const runTool = createRunTool(executeRaw);
+
   // 期限切れセッションの定期削除（10分ごと）
   const cleanupInterval = setInterval(() => {
     try {
@@ -168,16 +167,23 @@ async function main(): Promise<void> {
       return;
     }
 
-    // ツール実行: POST /tools/:toolName
+    // ツール実行(生): POST /tools/:toolName（デバッグ・後方互換用のプリミティブ）
     const toolMatch = url.match(/^\/tools\/(.+)$/);
     if (method === "POST" && toolMatch) {
-      await handleToolCall(toolMatch[1], req, res, client);
+      await handleToolCall(toolMatch[1], req, res, executeRaw);
+      return;
+    }
+
+    // ツール実行(整形済み): POST /api/tools/:name/run（外部=pi 連携向け、ADR-0020）
+    const toolRunMatch = url.match(/^\/api\/tools\/(.+)\/run$/);
+    if (method === "POST" && toolRunMatch) {
+      await handleToolRun(toolRunMatch[1], req, res, runTool);
       return;
     }
 
     // AI 質問受付(Discord用): POST /ask
     if (method === "POST" && url === "/ask") {
-      await handleDiscordAsk(req, res);
+      await handleDiscordAsk(req, res, runTool);
       return;
     }
 
@@ -401,7 +407,7 @@ async function main(): Promise<void> {
 
     // Web用: AI質問
     if (method === "POST" && url === "/api/web/ask") {
-      await handleWebAsk(req, res);
+      await handleWebAsk(req, res, runTool);
       return;
     }
 
@@ -445,7 +451,8 @@ async function main(): Promise<void> {
     console.log(`  GET  /                    - WebチャットUI`);
     console.log(`  GET  /health              - ヘルスチェック`);
     console.log(`  GET  /tools               - ツール一覧`);
-    console.log(`  POST /tools/:name          - ツール実行`);
+    console.log(`  POST /tools/:name          - ツール実行(生)`);
+    console.log(`  POST /api/tools/:name/run  - ツール実行(整形済み)`);
     console.log(`  POST /ask                  - Discord用AI質問受付`);
     console.log(`  POST /reset                - Discord用会話リセット`);
     console.log(`  GET    /api/users            - Webユーザー一覧`);
@@ -547,7 +554,7 @@ async function handleToolCall(
   toolName: string,
   req: IncomingMessage,
   res: ServerResponse,
-  client: Client,
+  executeRaw: ExecuteRaw,
 ): Promise<void> {
   try {
     const body = await readBody(req);
@@ -555,66 +562,16 @@ async function handleToolCall(
 
     console.log(`ツール実行: ${toolName}`, JSON.stringify(args).substring(0, 200));
 
-    // 対戦記録は MCP ではなく Pi 側の Parquet 参照で処理する（ADR-0010）。
-    // 応答は MCP と同じ形にそろえ、呼び出し側の分岐を増やさない
-    if (isMatchTool(toolName)) {
-      const text = await executeMatchTool(toolName, args);
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          success: true,
-          result: { content: [{ type: "text", text }] },
-        }),
-      );
-      return;
-    }
-
-    // 育成論の取り込み（ADR-0013）。同じく bridge 側で処理する
-    if (isTheoryTool(toolName)) {
-      const text = await executeTheoryTool(toolName, args);
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          success: true,
-          result: { content: [{ type: "text", text }] },
-        }),
-      );
-      return;
-    }
-
-    // 使用率ランキング（ADR-0014）。同じく bridge 側で処理する
-    if (isRankingTool(toolName)) {
-      const text = await executeRankingTool(toolName, args);
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          success: true,
-          result: { content: [{ type: "text", text }] },
-        }),
-      );
-      return;
-    }
-
-    // 対戦振り返りの記録（ADR-0017）。同じく bridge 側で処理する
-    if (isReviewTool(toolName)) {
-      const text = await executeReviewTool(toolName, args);
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          success: true,
-          result: { content: [{ type: "text", text }] },
-        }),
-      );
-      return;
-    }
-
-    const result = await client.callTool({
-      name: toolName,
-      arguments: args,
-    });
-
+    // 生のツール実行（整形・名前空間なし）。デバッグ・後方互換用のプリミティブ。
+    // 整形済みが欲しい場合は POST /api/tools/:name/run を使う（ADR-0020）
+    const text = await executeRaw(toolName, args);
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ success: true, result }));
+    res.end(
+      JSON.stringify({
+        success: true,
+        result: { content: [{ type: "text", text }] },
+      }),
+    );
   } catch (error) {
     console.error(`ツール実行エラー [${toolName}]:`, error);
     res.writeHead(500, { "Content-Type": "application/json" });
@@ -622,7 +579,71 @@ async function handleToolCall(
   }
 }
 
-async function handleDiscordAsk(req: IncomingMessage, res: ServerResponse): Promise<void> {
+/**
+ * 整形済みツール実行（ADR-0020）。外部（pi 連携）向け。
+ *
+ * `user_id` から Web の名前空間（user:{id}）を導出し、共有実行層で
+ * 「applyPartyNamespace → 実行 → stripPartyNamespace → formatToolResult」を通して
+ * 返す。ツール実行レベルの失敗は 200 + { success: false, error } で返す
+ * （失敗内容を AI に渡してループを継続する方針。DP2）。不正リクエストのみ 400。
+ */
+async function handleToolRun(
+  toolName: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+  runTool: RunTool,
+): Promise<void> {
+  try {
+    const body = await readBody(req);
+    const parsed = JSON.parse(body) as {
+      args?: unknown;
+      user_id?: string;
+    };
+
+    if (typeof parsed.user_id !== "string" || parsed.user_id.trim() === "") {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "user_id が必要です" }));
+      return;
+    }
+
+    const args = parsed.args ?? {};
+    if (typeof args !== "object" || Array.isArray(args)) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "args はオブジェクトで指定してください" }));
+      return;
+    }
+
+    console.log(`[tool-run] userId=${parsed.user_id} tool=${toolName}`);
+
+    const result = await runTool(
+      webNamespace(parsed.user_id),
+      toolName,
+      args as Record<string, unknown>,
+    );
+
+    if (!result.ok) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ success: false, error: result.error }));
+      return;
+    }
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({ success: true, content: [{ type: "text", text: result.text }] }),
+    );
+  } catch (error) {
+    // body の parse 不能など不正リクエストのみここへ来る
+    console.error(`[tool-run] リクエスト不正 [${toolName}]:`, error);
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: String(error) }));
+  }
+}
+
+async function handleDiscordAsk(
+  req: IncomingMessage,
+  res: ServerResponse,
+  runTool: RunTool,
+): Promise<void> {
   try {
     const body = await readBody(req);
     const askRequest = JSON.parse(body) as AskRequest;
@@ -654,7 +675,7 @@ async function handleDiscordAsk(req: IncomingMessage, res: ServerResponse): Prom
       interactionToken: askRequest.interactionToken,
       apiKey: OPENCODE_GO_API_KEY,
       baseUrl: OPENCODE_GO_BASE_URL,
-      bridgeUrl: BRIDGE_URL,
+      runTool,
     });
 
     if (!result.success) {
@@ -711,7 +732,11 @@ function createEventSender(res: ServerResponse): (event: string, data: unknown) 
   };
 }
 
-async function handleWebAsk(req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handleWebAsk(
+  req: IncomingMessage,
+  res: ServerResponse,
+  runTool: RunTool,
+): Promise<void> {
   // Accept ヘッダーで SSE と従来の JSON を切り替える。
   // curl などからの単発呼び出しは JSON のまま使える
   const wantsSse = String(req.headers.accept ?? "").includes("text/event-stream");
@@ -742,7 +767,7 @@ async function handleWebAsk(req: IncomingMessage, res: ServerResponse): Promise<
         sessionId: webReq.session_id,
         apiKey: OPENCODE_GO_API_KEY,
         baseUrl: OPENCODE_GO_BASE_URL,
-        bridgeUrl: BRIDGE_URL,
+        runTool,
       });
 
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -774,7 +799,7 @@ async function handleWebAsk(req: IncomingMessage, res: ServerResponse): Promise<
         sessionId: webReq.session_id,
         apiKey: OPENCODE_GO_API_KEY,
         baseUrl: OPENCODE_GO_BASE_URL,
-        bridgeUrl: BRIDGE_URL,
+        runTool,
         onProgress: (progress) => send("tool", progress),
       });
       send("done", toWebAskResponse(result));
@@ -901,7 +926,8 @@ async function handleSessionRename(
 /** 履歴として返す前に、クイズの構造ブロックを読める形へ置き換える（ADR-0011） */
 function renderStoredMessage(message: ChatMessage): ChatMessage {
   if (message.role !== "assistant" || !message.content) return message;
-  return { ...message, content: renderStoredReply(message.content) };
+  // DSML が混ざったまま保存された古い応答は、表示前に取り除く（dsml.ts）
+  return { ...message, content: renderStoredReply(stripDsml(message.content)) };
 }
 
 async function handleSessionMessages(rawId: string, res: ServerResponse): Promise<void> {

@@ -325,7 +325,6 @@ npx wrangler secret put ALLOWED_CHANNEL_IDS
 | `DATABASE_PATH` | SQLite ファイルパス（`/tmp` 配下は再起動や systemd のクリーンアップで消えるため指定しない） | `~/.local/share/rotom/conversations.db` |
 | `OPENCODE_GO_API_KEY` | OpenCode Go API キー | **(必須)** |
 | `OPENCODE_GO_BASE_URL` | API ベース URL | `https://opencode.ai/zen/go/v1` |
-| `BRIDGE_URL` | ツール実行用内部 URL | `http://127.0.0.1:3210` |
 | `AI_ROTOM_COMMAND` | ai-rotom MCP サーバーの起動コマンド（ADR-0019） | `npx` |
 | `AI_ROTOM_ARGS` | 起動引数（空白区切り）。未リリース main のローカルビルドを使う場合は `node` と `dist/index.mjs` のパスを指定 | `-y @nonz250/ai-rotom` |
 | `PARENT_PIN` | Web UI 保護者設定の初期 PIN（数字4桁） | `1234` |

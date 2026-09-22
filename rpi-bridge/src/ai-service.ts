@@ -1,12 +1,8 @@
 import type { ChatMessage, ToolCall, ToolDefinition, ModelDefinition, OpenCodeGoResponse } from "./types.js";
+import { parseDsml } from "./dsml.js";
 import { TOOL_DEFINITIONS } from "./tool-definitions.js";
-import { formatToolResult } from "./tool-result-formatter.js";
-import {
-  applyPartyNamespace,
-  stripPartyNamespace,
-  webNamespace,
-  DISCORD_NAMESPACE,
-} from "./party-namespace.js";
+import { webNamespace, DISCORD_NAMESPACE } from "./party-namespace.js";
+import type { RunTool } from "./tool-runner.js";
 import { describeToolCall, type ToolProgress } from "./tool-progress.js";
 import {
   getOrCreateSession,
@@ -57,7 +53,6 @@ const MAX_TOOL_CALLS = 30;
  * モデルのホスト先が変わってレイテンシが伸び、120 秒では足りなくなった。
  */
 const API_TIMEOUT_MS = 240_000;
-const TOOL_TIMEOUT_MS = 60_000;
 
 /**
  * Discord の interaction token は 15 分で失効し、以降は応答を送れない。
@@ -179,9 +174,22 @@ export async function chatCompletion(
   const choice = data.choices[0];
   const message = choice.message;
 
+  // DeepSeek 系モデルはツール呼び出しを DSML として推論テキストに書くことがあり、
+  // ゲートウェイが tool_calls へ変換し損ねると content に生のマークアップが残る。
+  // 自前で解釈して tool_calls にし、本文からは取り除く（dsml.ts）。
+  const { content, toolCalls: dsmlToolCalls } = parseDsml(message.content);
+  if (dsmlToolCalls.length > 0) {
+    console.warn(
+      `[ai] content に DSML ツール呼び出しを検出: ${dsmlToolCalls.map((c) => c.function.name).join(", ")}` +
+        ` (structured=${message.tool_calls?.length ?? 0}件)`,
+    );
+  }
+  // 構造化 tool_calls が返っていればそれを優先し、無ければ DSML から復元したものを使う
+  const toolCalls = message.tool_calls?.length ? message.tool_calls : dsmlToolCalls;
+
   return {
-    content: message.content,
-    toolCalls: message.tool_calls ?? [],
+    content: content || null,
+    toolCalls,
     finishReason: choice.finish_reason,
     // ゲートウェイが黙って既定へ落とした場合も、ここで実モデルが分かる（ADR-0016）
     model: data.model || model.id,
@@ -304,13 +312,9 @@ export async function executeToolCallLoop(
       return messages;
     }
 
-    if (finishReason === "stop") {
-      if (content) {
-        messages.push({ role: "assistant", content, model: completion.model });
-      }
-      return messages;
-    }
-
+    // ツール呼び出しが無ければ（finish_reason が stop でも tool_calls でも）
+    // 本文を最終回答として返す。DSML から復元した toolCalls がある場合は
+    // finish_reason が stop でもここを通過せず、下のツール実行へ進む。
     if (toolCalls.length === 0) {
       if (content) {
         messages.push({ role: "assistant", content, model: completion.model });
@@ -368,40 +372,16 @@ export async function executeToolCallLoop(
   );
 }
 
-function createToolExecutor(bridgeUrl: string, namespace: string) {
+/**
+ * 共有実行層（tool-runner.ts）に名前空間を固定し、executeToolCallLoop が求める
+ * 「LLM に渡す文字列」へ写す（ADR-0020）。整形・名前空間は共有実行層側で適用済み。
+ */
+function createToolExecutor(runTool: RunTool, namespace: string) {
   return async (toolName: string, args: Record<string, unknown>): Promise<string> => {
-    // パーティ系ツールは利用者ごとの名前空間を付けてから呼ぶ
-    const scopedArgs = applyPartyNamespace(toolName, args, namespace);
-
-    let response: Response;
-    try {
-      response = await fetch(`${bridgeUrl}/tools/${toolName}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(scopedArgs),
-        signal: AbortSignal.timeout(TOOL_TIMEOUT_MS),
-      });
-    } catch (error) {
-      // 例外を投げるとループ全体が落ちるため、失敗も結果として AI に返す
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`[ai] ツール呼び出し失敗 [${toolName}]: ${message}`);
-      return JSON.stringify({ success: false, error: `Tool call failed: ${message}` });
-    }
-    if (!response.ok) {
-      return JSON.stringify({ success: false, error: `Bridge error: ${response.status}` });
-    }
-    const bridgeResult = (await response.json()) as {
-      success: boolean;
-      result?: { content?: Array<{ type: string; text?: string }> };
-      error?: string;
-    };
-    if (!bridgeResult.success) {
-      return JSON.stringify({ success: false, error: bridgeResult.error });
-    }
-    const raw = bridgeResult.result?.content?.[0]?.text
-      ?? JSON.stringify(bridgeResult.result);
-    // 名前空間を外してから整形する（AI と利用者には元の名前だけを見せる）
-    return formatToolResult(toolName, stripPartyNamespace(toolName, raw, namespace));
+    const result = await runTool(namespace, toolName, args);
+    if (result.ok) return result.text;
+    // 失敗も例外にせず、失敗内容を文字列で AI に返してループを継続する
+    return JSON.stringify({ success: false, error: result.error });
   };
 }
 
@@ -510,7 +490,7 @@ async function processAiMessages(
   model: ModelDefinition,
   apiKey: string,
   baseUrl: string,
-  bridgeUrl: string,
+  runTool: RunTool,
   namespace: string,
   deadlineAt?: number,
   onProgress?: (progress: ToolProgress) => void,
@@ -526,7 +506,7 @@ async function processAiMessages(
     apiKey,
     baseUrl,
     sessionId,
-    createToolExecutor(bridgeUrl, namespace),
+    createToolExecutor(runTool, namespace),
     deadlineAt,
     onProgress,
   );
@@ -567,7 +547,7 @@ export interface AskContext {
   interactionToken: string;
   apiKey: string;
   baseUrl: string;
-  bridgeUrl: string;
+  runTool: RunTool;
 }
 
 export async function runAsk(
@@ -590,7 +570,7 @@ export async function runAsk(
       model,
       ctx.apiKey,
       ctx.baseUrl,
-      ctx.bridgeUrl,
+      ctx.runTool,
       DISCORD_NAMESPACE,
       deadlineAt,
     );
@@ -625,7 +605,7 @@ export interface WebAskContext {
   sessionId?: string;
   apiKey: string;
   baseUrl: string;
-  bridgeUrl: string;
+  runTool: RunTool;
   /** SSE で進捗を配信する場合に渡す。省略時は通知しない */
   onProgress?: (progress: ToolProgress) => void;
 }
@@ -648,7 +628,7 @@ export async function runAskForWeb(
     model,
     ctx.apiKey,
     ctx.baseUrl,
-    ctx.bridgeUrl,
+    ctx.runTool,
     webNamespace(ctx.userId),
     undefined,
     ctx.onProgress,
