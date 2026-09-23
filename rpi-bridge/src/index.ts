@@ -44,6 +44,8 @@ import { closeDb } from "./db.js";
 import { closeMatchRepository } from "./match-repository.js";
 import { createExecuteRaw, createRunTool, type ExecuteRaw, type RunTool } from "./tool-runner.js";
 import { webNamespace } from "./party-namespace.js";
+import { inspectReviewInput } from "./review-harness.js";
+import { saveMatchReview, buildMatchReview } from "./match-reviews.js";
 
 const PORT = parseInt(process.env.PORT ?? "3210", 10);
 const HOST = process.env.HOST ?? "127.0.0.1";
@@ -178,6 +180,12 @@ async function main(): Promise<void> {
     const toolRunMatch = url.match(/^\/api\/tools\/(.+)\/run$/);
     if (method === "POST" && toolRunMatch) {
       await handleToolRun(toolRunMatch[1], req, res, runTool);
+      return;
+    }
+
+    // 対戦振り返りの検品・保存（ADR-0021）
+    if (method === "POST" && url === "/api/reviews/inspect") {
+      await handleReviewInspect(req, res);
       return;
     }
 
@@ -453,6 +461,7 @@ async function main(): Promise<void> {
     console.log(`  GET  /tools               - ツール一覧`);
     console.log(`  POST /tools/:name          - ツール実行(生)`);
     console.log(`  POST /api/tools/:name/run  - ツール実行(整形済み)`);
+    console.log(`  POST /api/reviews/inspect  - 対戦振り返りの検品・保存`);
     console.log(`  POST /ask                  - Discord用AI質問受付`);
     console.log(`  POST /reset                - Discord用会話リセット`);
     console.log(`  GET    /api/users            - Webユーザー一覧`);
@@ -637,6 +646,81 @@ async function handleToolRun(
     res.writeHead(400, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: String(error) }));
   }
+}
+
+/**
+ * 対戦振り返りの検品・保存（ADR-0021）。
+ *
+ * pi 連携の review_inspect ツールから呼ばれる。機械的検品（inspectReviewInput）を
+ * かけて指摘を注記し、matchId が特定できていれば match_reviews へ保存する。
+ * 保存本文には注記を含めない（ADR-0017）。
+ */
+async function handleReviewInspect(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let parsed: {
+    reply?: unknown;
+    called_tools?: unknown;
+    match_id?: unknown;
+    match_at_timestamp?: unknown;
+  };
+  try {
+    parsed = JSON.parse(await readBody(req));
+  } catch {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "不正な JSON です" }));
+    return;
+  }
+
+  if (typeof parsed.reply !== "string" || parsed.reply.trim() === "") {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "reply が必要です" }));
+    return;
+  }
+  const reply = parsed.reply;
+
+  const calledTools = Array.isArray(parsed.called_tools)
+    ? parsed.called_tools.filter((x): x is string => typeof x === "string")
+    : [];
+  const matchId =
+    typeof parsed.match_id === "string" && parsed.match_id.trim() !== ""
+      ? parsed.match_id.trim()
+      : undefined;
+  const matchAtTimestamp =
+    typeof parsed.match_at_timestamp === "string" && parsed.match_at_timestamp.trim() !== ""
+      ? parsed.match_at_timestamp.trim()
+      : undefined;
+
+  const issues = inspectReviewInput({ reply, calledTools, matchId, matchAtTimestamp });
+
+  // 検品の指摘は注記として回答へ足し、保存本文には含めない（ADR-0017）
+  const finalReply =
+    issues.length > 0
+      ? reply + "\n\n---\n（振り返りの確認メモ）\n" + issues.map((x) => `- ${x}`).join("\n")
+      : reply;
+
+  let saved = false;
+  if (matchId !== undefined) {
+    try {
+      saveMatchReview(buildMatchReview(matchId, reply));
+      saved = true;
+    } catch (error) {
+      console.error("[review-inspect] 振り返りの保存に失敗しました:", error);
+    }
+  }
+
+  console.log(
+    `[review-inspect] match=${matchId ?? "(なし)"} issues=${issues.length} saved=${saved}`,
+  );
+
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(
+    JSON.stringify({
+      success: true,
+      issues,
+      saved,
+      match_id: matchId ?? null,
+      final_reply: finalReply,
+    }),
+  );
 }
 
 async function handleDiscordAsk(

@@ -88,13 +88,30 @@ function isAnalysisTool(name: string): boolean {
  * 「ポケモン名のハルシネーション」は固有名詞辞書が要るため TBD として
  * 未実装（ADR-0017）。文脈に依存する違反（従来作の仕様で語る等）は評価役 LLM が担う。
  */
-export function inspectReview(reply: string, messages: ChatMessage[]): string[] {
+/** 機械的検品の入力（messages 配列に依存しない、API 向けの形。ADR-0021） */
+export interface ReviewInspectInput {
+  /** 振り返り本文 */
+  reply: string;
+  /** このターンに呼ばれたツール名（順序込み） */
+  calledTools: string[];
+  /** get_match に渡した matchId */
+  matchId?: string;
+  /** list_matches 結果の matchAtTimestamp */
+  matchAtTimestamp?: string;
+}
+
+/**
+ * 機械的検品（messages 配列に依存しない版）。
+ *
+ * ask パイプライン外（pi 連携の /api/reviews/inspect）からも呼べるよう、
+ * 判定に必要な最小情報だけを受ける。判定ロジックは従来の inspectReview と同一。
+ */
+export function inspectReviewInput(input: ReviewInspectInput): string[] {
   const issues: string[] = [];
-  const names = calledToolNames(messages);
 
   // 1. load_party を経由せず分析ツールを呼んでいる（SP=0 混入の疑い）
-  const usedAnalysis = names.some(isAnalysisTool);
-  const usedLoadParty = names.includes("load_party");
+  const usedAnalysis = input.calledTools.some(isAnalysisTool);
+  const usedLoadParty = input.calledTools.includes("load_party");
   if (usedAnalysis && !usedLoadParty) {
     issues.push(
       "分析ツールが load_party を経由せずに呼ばれています。数値は SP=0・持ち物なしで計算された参考値の可能性があります",
@@ -102,26 +119,33 @@ export function inspectReview(reply: string, messages: ChatMessage[]): string[] 
   }
 
   // 2. 行動ログがないのにターン単位の推移を語る表現（明確なパターンのみ）
-  if (/ターン目|ターン推移/.test(reply)) {
+  if (/ターン目|ターン推移/.test(input.reply)) {
     issues.push(
       "対戦記録には行動ログ（技・ダメージ・ターン推移）が含まれていません。ターン単位の断定は記録にない情報です",
     );
   }
 
   // 3. 再生位置（t=）が指す対戦と、振り返った対戦の食い違い
-  const matchAtTimestamp = extractMatchAtTimestamp(messages);
-  const matchId = extractMatchId(messages);
   if (
-    matchAtTimestamp !== undefined &&
-    matchId !== undefined &&
-    matchAtTimestamp !== matchId
+    input.matchAtTimestamp !== undefined &&
+    input.matchId !== undefined &&
+    input.matchAtTimestamp !== input.matchId
   ) {
     issues.push(
-      `URL の再生位置が指す対戦（${matchAtTimestamp}）と、振り返った対戦（${matchId}）が異なります`,
+      `URL の再生位置が指す対戦（${input.matchAtTimestamp}）と、振り返った対戦（${input.matchId}）が異なります`,
     );
   }
 
   return issues;
+}
+
+export function inspectReview(reply: string, messages: ChatMessage[]): string[] {
+  return inspectReviewInput({
+    reply,
+    calledTools: calledToolNames(messages),
+    matchId: extractMatchId(messages),
+    matchAtTimestamp: extractMatchAtTimestamp(messages),
+  });
 }
 
 /** 評価役が照合する完成条件（ADR-0017）。採点の正本 */

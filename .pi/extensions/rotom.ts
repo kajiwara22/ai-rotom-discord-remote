@@ -7,6 +7,48 @@ import { StringEnum } from "@earendil-works/pi-ai";
 
 const BRIDGE_URL = process.env.ROTOM_BRIDGE_URL ?? "http://127.0.0.1:3210";
 const USER_ID = process.env.ROTOM_USER_ID ?? "me";
+// 対戦振り返りの検品（ADR-0021）に使う、ツール呼び出しの自動捕捉。
+// モデルに自己申告させず、execute 経由で実際の呼び出し履歴を記録する。
+let reviewContext = {
+  calledTools: [] as string[],
+  matchId: undefined as string | undefined,
+  matchAtTimestamp: undefined as string | undefined,
+};
+
+function resetReviewContext() {
+  reviewContext = { calledTools: [], matchId: undefined, matchAtTimestamp: undefined };
+}
+
+// 振り返りは必ず list_matches から始まる（システムプロンプトの手順）。ここでターンを切る。
+function recordToolCall(name: string, args: unknown) {
+  if (name === "list_matches") {
+    resetReviewContext();
+  }
+  reviewContext.calledTools.push(name);
+  if (name === "get_match") {
+    const a = args as { matchId?: unknown };
+    if (typeof a.matchId === "string" && a.matchId !== "") {
+      reviewContext.matchId = a.matchId;
+    }
+  }
+}
+
+// list_matches の結果から matchAtTimestamp（t= が指す対戦）を取り出す。
+function captureMatchAtTimestamp(name: string, resultText: string) {
+  if (name !== "list_matches") return;
+  try {
+    const data = JSON.parse(resultText);
+    if (data && typeof data === "object" && "matchAtTimestamp" in data) {
+      const v = (data as { matchAtTimestamp?: unknown }).matchAtTimestamp;
+      if (typeof v === "string" && v !== "") {
+        reviewContext.matchAtTimestamp = v;
+      }
+    }
+  } catch {
+    // 結果が JSON でなければ検品3（t=食い違い）はスキップされる
+  }
+}
+
 
 interface ToolEntry {
   name: string;
@@ -288,6 +330,7 @@ export default function rotomExtension(pi: ExtensionAPI) {
       promptSnippet: tool.promptSnippet,
       parameters: tool.parameters,
       async execute(_toolCallId, params, signal) {
+        recordToolCall(name, params);
         const response = await fetch(`${BRIDGE_URL}/api/tools/${name}/run`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -299,8 +342,42 @@ export default function rotomExtension(pi: ExtensionAPI) {
           throw new Error(data.error ?? `rotom bridge error (HTTP ${response.status})`);
         }
         const text = data.content?.[0]?.text ?? "";
+        captureMatchAtTimestamp(name, text);
         return { content: [{ type: "text", text }], details: {} };
       },
     });
   }
+
+  // 対戦振り返りの検品・保存（ADR-0021）
+  pi.registerTool({
+    name: "review_inspect",
+    label: "振り返り検品・保存",
+    description: "対戦振り返りの本文を検品し、match_reviews へ保存する。振り返りを書き終えたら本文を reply に渡して呼び、返ってきた final_reply を利用者への回答として提示する。",
+    promptSnippet: "対戦振り返りの本文を検品・保存する",
+    parameters: Type.Object({
+      reply: Type.String({ description: "検品・保存する振り返り本文" }),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const response = await fetch(`${BRIDGE_URL}/api/reviews/inspect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reply: params.reply,
+          called_tools: reviewContext.calledTools,
+          match_id: reviewContext.matchId,
+          match_at_timestamp: reviewContext.matchAtTimestamp,
+        }),
+        signal,
+      });
+      const data = await response.json();
+      if (data.success !== true) {
+        throw new Error(data.error ?? `rotom review inspect error (HTTP ${response.status})`);
+      }
+      return {
+        content: [{ type: "text", text: data.final_reply ?? params.reply }],
+        details: { issues: data.issues ?? [], saved: data.saved ?? false },
+      };
+    },
+  });
+
 }
