@@ -30,6 +30,13 @@ export const MODEL_DEFINITIONS: Record<string, ModelDefinition> = {
     reasoning_effort: "low",
     max_tokens: 8192,
   },
+  // deepseek 高速版の後継（v4.1）。probe で low / none / high とも 200、tool_calls あり。
+  // low では finish=length（推論が max_tokens を食う）傾向だが、実運用の 8192 では問題なし。
+  "deepseek-v4.1-flash": {
+    id: "deepseek-v4.1-flash",
+    reasoning_effort: "low",
+    max_tokens: 8192,
+  },
   // glm 系は reasoning_effort="none" が 400 になるため、low / high のみ使う。
   "glm-5.3-flash": {
     id: "glm-5.3-flash",
@@ -44,6 +51,12 @@ export const MODEL_DEFINITIONS: Record<string, ModelDefinition> = {
   // qwen は none / low / high とも 200。low が最速だったため low を選ぶ。
   "qwen3.8-max": {
     id: "qwen3.8-max",
+    reasoning_effort: "low",
+    max_tokens: 8192,
+  },
+  // qwen の高速版（flash）。probe で low / none / high とも 200、tool_calls あり。
+  "qwen3.8-flash": {
+    id: "qwen3.8-flash",
     reasoning_effort: "low",
     max_tokens: 8192,
   },

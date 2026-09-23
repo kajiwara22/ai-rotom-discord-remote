@@ -31,6 +31,10 @@ fi
 API_KEY="${OPENCODE_GO_API_KEY:-}"
 BASE_URL="${OPENCODE_GO_BASE_URL:-https://opencode.ai/zen/go/v1}"
 
+# OpenCode Go は x-opencode-session ヘッダーを要求する（ルーティング最適化用）。
+# 本番の ai-service.ts は会話ごとの安定ハッシュを送るが、プローブでは固定値でよい。
+SESSION_HEADER="x-opencode-session: probe-session"
+
 if [ -z "$API_KEY" ]; then
   echo "エラー: OPENCODE_GO_API_KEY が設定されていません（env または rpi-bridge/.env）。" >&2
   exit 1
@@ -67,6 +71,7 @@ probe() {
     local started status body elapsed fin
     started=$(date +%s%3N)
     body=$(curl -sS -w '\n%{http_code}' -H "Authorization: Bearer $API_KEY" \
+      -H "$SESSION_HEADER" \
       -H "Content-Type: application/json" -d "$payload" "$BASE_URL/chat/completions")
     status=$(printf '%s' "$body" | tail -n1)
     elapsed=$(( $(date +%s%3N) - started ))
@@ -87,7 +92,8 @@ probe() {
       "tools": [{"type":"function","function":{"name":"get_weather","description":"天気を取得","parameters":{"type":"object","properties":{}}}}],
       "tool_choice": "auto",
   }))' "$model")
-  tool_body=$(curl -sS -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  tool_body=$(curl -sS -H "Authorization: Bearer $API_KEY" -H "$SESSION_HEADER" \
+    -H "Content-Type: application/json" \
     -d "$tool_payload" "$BASE_URL/chat/completions")
   tool_calls=$(printf '%s' "$tool_body" | python3 -c '
 import json,sys
