@@ -11,9 +11,9 @@
 import type { ChatMessage } from "./types.js";
 
 /** 対戦振り返りの入口となるツール。これらを呼んだターンを振り返りとみなす */
-const REVIEW_TOOLS = ["list_matches", "get_match"];
+const REVIEW_TOOLS = ["list_matches", "get_match", "get_match_turns"];
 
-/** このターンが対戦振り返りかどうか（list_matches / get_match を呼んだか） */
+/** このターンが対戦振り返りかどうか（list_matches / get_match / get_match_turns を呼んだか） */
 export function isReviewTurn(messages: ChatMessage[]): boolean {
   return messages.some(
     (m) =>
@@ -118,14 +118,30 @@ export function inspectReviewInput(input: ReviewInspectInput): string[] {
     );
   }
 
-  // 2. 行動ログがないのにターン単位の推移を語る表現（明確なパターンのみ）
-  if (/ターン目|ターン推移/.test(input.reply)) {
+  // 2. 相手の行動の断定（行動ログに残るのは自分の行動だけ。ADR-0022）
+  // 「してきたら」「〜とき」のような仮定・条件の表現は除く（明確なパターンのみ）
+  if (
+    /(?:相手|敵)[^。\n]{0,30}(?:てきた|て来た)(?![らりるれ]|とき|場合|なら)/.test(
+      input.reply,
+    )
+  ) {
     issues.push(
-      "対戦記録には行動ログ（技・ダメージ・ターン推移）が含まれていません。ターン単位の断定は記録にない情報です",
+      "相手の行動を断定しています。行動ログに残っているのは自分の行動だけです",
     );
   }
 
-  // 3. 再生位置（t=）が指す対戦と、振り返った対戦の食い違い
+  // 3. 対戦中のダメージ・HP の推移の断定（記録に無い。計算ツールの予測値とは別）
+  if (
+    /HP[^。\n]{0,15}(?:残って|残り|赤|黄色|ピンチ)|体力[^。\n]{0,15}(?:残って|残り|削られ)|ダメージを?受け(?:た|て)|[0-9０-９]+割[^。\n]{0,10}(?:削られ|減った)/.test(
+      input.reply,
+    )
+  ) {
+    issues.push(
+      "対戦中のダメージ・HP の推移を断定しています。その情報は記録に含まれていません（ダメージ計算ツールの予測値とは別です）",
+    );
+  }
+
+  // 4. 再生位置（t=）が指す対戦と、振り返った対戦の食い違い
   if (
     input.matchAtTimestamp !== undefined &&
     input.matchId !== undefined &&
@@ -154,7 +170,7 @@ const ACCEPTANCE_CRITERIA = [
   "事実（記録に基づく）と解釈（分析）が分かれている",
   "数値の根拠がツール結果に基づく（記憶や推測の数値を断定していない）",
   "load_party で取得した持ち物・技・性格・SP で分析している（SP=0 混入なし）",
-  "行動ログがないのにターン・ダメージ推移を断定していない",
+  "行動ログは自分の行動だけである前提を守っている（相手の行動・ダメージ・HP・命中を断定していない）",
   "従来作（SV 等）の仕様で語っていない",
   "選出（シングル 3 体／ダブル 4 体）とチーム（6 体）を混同していない",
   "「次の一手」など、次に実践できる具体的な結論で締めている",

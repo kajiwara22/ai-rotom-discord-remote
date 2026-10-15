@@ -333,7 +333,8 @@ npx wrangler secret put ALLOWED_CHANNEL_IDS
 | `R2_ACCESS_KEY_ID` | R2 のアクセスキー ID | 同上 |
 | `R2_SECRET_ACCESS_KEY` | R2 のシークレットアクセスキー | 同上 |
 | `R2_BUCKET_NAME` | 対戦記録のバケット名 | `pcc-data` |
-| `PCC_PARQUET_KEY` | 対戦記録のオブジェクトキー | `index/matches.parquet` |
+| `PCC_PARQUET_KEY` | 対戦記録（選出・構築）のオブジェクトキー | `index/matches.parquet` |
+| `PCC_TURNS_KEY` | 自分の行動ログのオブジェクトキー（ADR-0022） | `index/turns.parquet` |
 
 ### 7. 動作確認
 

@@ -6,8 +6,10 @@
  * 解析側が差し替えた瞬間から新しいデータで答えられる。
  * 詳しい経緯は docs/adr/ADR-0010.md を参照。
  *
- * このデータに行動ログ（技・ダメージ・ターン推移）は含まれない。
- * 扱えるのは選出フェーズまでであり、その制約は応答の notes で AI に伝える。
+ * このデータに相手の行動・ダメージ・HP は含まれない。扱えるのは選出・構築と、
+ * 自分側の行動ログ（技・交代・メガ）までであり、その制約は応答の notes で AI に伝える。
+ * 行動ログは `turns.parquet` に別オブジェクトとして入り、get_match_turns が読む
+ * （docs/adr/ADR-0022.md）。自分の行動だけであり、ターンの抜けも広い。
  *
  * 解析側が自分のパーティ名（selfPartySlug）と 6 体構成（selfTeam）を Parquet に
  * 埋め込むようになった（docs/adr/ADR-0012.md）。get_match / list_matches がそれらを
@@ -17,6 +19,10 @@ import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
 
 const BUCKET = process.env.R2_BUCKET_NAME ?? "pcc-data";
 const OBJECT_KEY = process.env.PCC_PARQUET_KEY ?? "index/matches.parquet";
+const TURNS_KEY = process.env.PCC_TURNS_KEY ?? "index/turns.parquet";
+
+/** 技名の特定が不確かとみなす確信度のしきい値（docs/adr/ADR-0022.md） */
+const UNCERTAIN_CONFIDENCE = 0.8;
 
 /** YouTube の動画 ID。11 文字の URL セーフな文字列 */
 const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
@@ -53,6 +59,26 @@ interface PartyAggRow {
   total: number | string;
   win: number | string;
   lose: number | string;
+}
+
+/**
+ * turns.parquet の 1 行。
+ * 自分の行動だけが入り、相手の行動・ダメージ・HP は含まれない（docs/adr/ADR-0022.md）。
+ * matches.parquet の列（title / result / selfPartySlug / startSec）は JOIN で補う。
+ */
+interface TurnRow {
+  videoId: string;
+  turn: number;
+  sec: number;
+  action: string;
+  species: string;
+  move: string | null;
+  direction: string | null;
+  confidence: number;
+  title: string;
+  result: string;
+  selfPartySlug: string | null;
+  startSec: number;
 }
 
 /**
@@ -150,7 +176,9 @@ async function connect(): Promise<DuckDBConnection> {
      )`,
   );
 
-  console.log(`[match] DuckDB 接続を初期化しました (s3://${BUCKET}/${OBJECT_KEY})`);
+  console.log(
+    `[match] DuckDB 接続を初期化しました (s3://${BUCKET}/${OBJECT_KEY}, s3://${BUCKET}/${TURNS_KEY})`,
+  );
   return connection;
 }
 
@@ -173,6 +201,7 @@ async function query<T = MatchRow>(sql: string, values: string[]): Promise<T[]> 
 
 /** Parquet の場所。利用者の入力は含まれないため、そのまま SQL に埋める */
 const SOURCE = `read_parquet(${quote(`s3://${BUCKET}/${OBJECT_KEY}`)})`;
+const TURNS_SOURCE = `read_parquet(${quote(`s3://${BUCKET}/${TURNS_KEY}`)})`;
 
 /** 動画の該当位置を指す URL */
 function watchUrl(videoId: string, startSec: number): string {
@@ -289,7 +318,7 @@ export async function getMatch(matchId: string): Promise<unknown> {
   const row = rows[0];
   const { selection: selectionCount, lead: leadCount } = selectionAndLeadSize(row.battleFormat);
   const notes = [
-    "この記録に技・ダメージ・ターン推移は含まれない。選出フェーズまでを扱うこと",
+    "この記録は選出と構築まで。自分の行動ログ（技・交代・メガ）は get_match_turns に matchId を渡すと取得できる（行動ログが無い対戦もある）。相手の行動・ダメージ・HP はどの記録にも無い",
     `team はこの対戦で使ったパーティ 6 体、party はそのパーティ名。分析ツール（analyze_selection など）で振り返る前に、まず load_party に party を渡して持ち物・技・性格・SP を取得すること。名前だけを渡すと SP=0・持ち物なしとして計算され、実戦と違う結論になる。分析には team（6 体）を使い、selfSelection（選出 ${selectionCount} 体）をパーティ全体と混同しないこと`,
   ];
   if (presentOrUndefined(row.opponentSelection) === undefined) {
@@ -311,6 +340,113 @@ export async function getMatch(matchId: string): Promise<unknown> {
     selfSelection: row.selfSelection,
     party: row.selfPartySlug ?? undefined,
     team: presentOrUndefined(row.selfTeam),
+    notes,
+  };
+}
+
+/**
+ * 1 つの対戦の自分の行動ログ。
+ *
+ * `turns.parquet` は自分の行動だけを持ち、ターンの抜けも広い。扱う情報と扱わない
+ * 情報の境界は docs/adr/ADR-0022.md で定めている。応答の先頭に coverage を置き、
+ * 空のターンが「何もしなかった」を意味しないことを AI に伝える。
+ *
+ * 記録が無いのは異常ではない（行動ログは新規に解析した動画にのみ付く）ため、
+ * 対戦そのものが存在する場合は success: true と空の turns を返す。
+ */
+export async function getMatchTurns(matchId: string): Promise<unknown> {
+  const trimmed = matchId.trim();
+  if (!MATCH_ID_PATTERN.test(trimmed)) {
+    return {
+      success: false,
+      error: `matchId の形式が不正です: ${matchId}（list_matches が返した matchId をそのまま渡してください）`,
+    };
+  }
+
+  const rows = await query<TurnRow>(
+    `SELECT t.videoId, t.turn, t.sec, t.action, t.species, t.move, t.direction, t.confidence,
+            m.title, m.result, m.selfPartySlug, m.startSec
+     FROM ${TURNS_SOURCE} t
+     JOIN ${SOURCE} m ON m.matchId = t.matchId
+     WHERE t.matchId = $1
+     ORDER BY t.turn, t.sec`,
+    [trimmed],
+  );
+
+  if (rows.length === 0) {
+    const exists = await query<{ matchId: string }>(
+      `SELECT matchId FROM ${SOURCE} WHERE matchId = $1`,
+      [trimmed],
+    );
+    if (exists.length === 0) {
+      return {
+        success: false,
+        error: `対戦記録が見つかりませんでした（matchId: ${trimmed}）`,
+      };
+    }
+    return {
+      success: true,
+      matchId: trimmed,
+      turns: {},
+      coverage: { turnsMax: 0, turnsRecorded: 0, missingTurns: [], rows: 0 },
+      notes: [
+        "この対戦には行動ログが無い。行動ログの抽出は新しく解析した動画にのみ付くため、古い対戦では空になる",
+        "選出と構築相性を中心に振り返ること",
+      ],
+    };
+  }
+
+  const turns: Record<string, Record<string, unknown>[]> = {};
+  let hasUncertain = false;
+  for (const row of rows) {
+    const action: Record<string, unknown> = {
+      sec: row.sec,
+      action: row.action,
+      species: row.species,
+      confidence: row.confidence,
+      url: watchUrl(row.videoId, row.sec),
+    };
+    if (row.move !== null) action.move = row.move;
+    if (row.direction !== null) action.direction = row.direction;
+    if (row.confidence < UNCERTAIN_CONFIDENCE) {
+      action.uncertain = true;
+      hasUncertain = true;
+    }
+    const key = String(row.turn);
+    (turns[key] ??= []).push(action);
+  }
+
+  const present = new Set(rows.map((row) => row.turn));
+  const turnsMax = Math.max(...present);
+  const missingTurns: number[] = [];
+  for (let turn = 1; turn <= turnsMax; turn++) {
+    if (!present.has(turn)) missingTurns.push(turn);
+  }
+
+  const first = rows[0];
+  const notes = [
+    "この行動ログは自分の行動のみ。相手の行動・ダメージ・HP・命中は記録されていない",
+    `記録は点列で、抜けているターンがある（missingTurns: ${missingTurns.join(", ") || "なし"}）。抜けは「何もしなかった」を意味しない`,
+    "action = switch は交代だけでなく、瀕死後の繰り出しも含む。direction = in を「交代で場に出た」と断定しないこと",
+    "各行動の url はその行動の瞬間（動画内の秒）を指す",
+  ];
+  if (hasUncertain) {
+    notes.push("uncertain: true の行は技名の特定が不確か。事実として断定しないこと");
+  }
+
+  return {
+    matchId: trimmed,
+    title: first.title,
+    result: first.result,
+    party: first.selfPartySlug ?? undefined,
+    url: watchUrl(first.videoId, first.startSec),
+    coverage: {
+      turnsMax,
+      turnsRecorded: present.size,
+      missingTurns,
+      rows: rows.length,
+    },
+    turns,
     notes,
   };
 }
@@ -401,7 +537,7 @@ export async function getPartyFromMatches(name?: string): Promise<unknown> {
     })),
     notes: [
       `全 ${total} 戦中、直近 10 戦を表示`,
-      "この記録に技・ダメージ・ターン推移は含まれない。選出フェーズまでを扱うこと",
+      "この一覧に相手の行動・ダメージ・HP は無い。自分の行動ログ（技・交代・メガ）は get_match_turns に matchId を渡すと取得できる（行動ログが無い対戦もある）",
     ],
   };
 }
@@ -422,6 +558,7 @@ export function isMatchTool(toolName: string): boolean {
   return (
     toolName === "list_matches" ||
     toolName === "get_match" ||
+    toolName === "get_match_turns" ||
     toolName === "get_party_from_matches"
   );
 }
@@ -443,6 +580,14 @@ export async function executeMatchTool(
         return JSON.stringify({ success: false, error: "video を指定してください" });
       }
       return JSON.stringify(await listMatches(video));
+    }
+
+    if (toolName === "get_match_turns") {
+      const matchId = args.matchId;
+      if (typeof matchId !== "string" || matchId.trim() === "") {
+        return JSON.stringify({ success: false, error: "matchId を指定してください" });
+      }
+      return JSON.stringify(await getMatchTurns(matchId));
     }
 
     if (toolName === "get_party_from_matches") {

@@ -396,7 +396,7 @@ function findLastAssistantReplyIndex(messages: ChatMessage[]): number {
 /**
  * 対戦振り返りの検品と記録（ADR-0017）。
  *
- * 振り返りターン（list_matches / get_match を呼んだターン）に限って、
+ * 振り返りターン（list_matches / get_match / get_match_turns を呼んだターン）に限って、
  * 機械的検品 → 評価役 LLM（必要なら 1 回だけ書き直し）→ match_reviews へ保存
  * の順で処理する。検品で会話を止めない（ADR-0011 と同じ方針）。
  */

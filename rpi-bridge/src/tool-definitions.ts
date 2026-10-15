@@ -584,7 +584,25 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     function: {
       name: "get_match",
       description:
-        "1つの対戦の記録を取得する。相手の構築6体・相手の先発・自分のパーティ名（party）と6体構成（team）・自分の先発と選出・勝敗・動画の該当位置が分かる。選出・先発の体数は battleFormat に応じ、シングルは選出 3 体／先発 1 体、ダブルは選出 4 体／先発 2 体。技やダメージなどの行動ログは記録されていないため、選出や構築相性の振り返りに使うこと。持ち物・技などのパーティ詳細が必要なら、party を load_party に渡して保存済みパーティを取得する。",
+        "1つの対戦の選出と構築の記録を取得する。相手の構築6体・相手の先発・自分のパーティ名（party）と6体構成（team）・自分の先発と選出・勝敗・動画の該当位置が分かる。選出・先発の体数は battleFormat に応じ、シングルは選出 3 体／先発 1 体、ダブルは選出 4 体／先発 2 体。自分の行動ログ（技・交代・メガ）は get_match_turns で取得する。持ち物・技などのパーティ詳細が必要なら、party を load_party に渡して保存済みパーティを取得する。",
+      parameters: {
+        type: "object",
+        properties: {
+          matchId: {
+            type: "string",
+            description: "list_matches が返した matchId",
+          },
+        },
+        required: ["matchId"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_match_turns",
+      description:
+        "1つの対戦の自分の行動ログ（技・交代・メガ）をターン順に取得する。記録されるのは自分の行動だけで、相手の行動・ダメージ・HP・命中は無い。行動ログの抽出は新しく解析した動画にのみ付くため、古い対戦では空で返る（エラーではない）。ターンの抜けもあり、抜けは「何もしなかった」を意味しない。coverage（turnsMax / turnsRecorded / missingTurns / rows）で記録の粗さを確認し、行の uncertain: true は技名の特定が不確かであることを示す。action = switch は交代だけでなく瀕死後の繰り出しも含む。",
       parameters: {
         type: "object",
         properties: {
@@ -750,16 +768,24 @@ export function getSystemPrompt(): string {
 - 耐久調整: 主要対面相手の技を確定耐えする最低限の振りを逆算
 - 素早さ調整: 特定ラインを抜く/同速回避するピンポイント振り
 
-## 対戦振り返りの手順（list_matches / get_match / get_party_from_matches）
+## 対戦振り返りの手順（list_matches / get_match / get_match_turns / get_party_from_matches）
 対戦記録を振り返るときは、必ず次の順で進めてください。
 
 1. list_matches に動画 URL（t= は付けたまま）を渡し、振り返る対戦の matchId を決める
 2. get_match（matchId）で、自分のパーティ名（party）・6 体（team）・先発・選出と、相手の構築・先発・選出・勝敗を確認する
-3. **load_party に party を渡し、自分のパーティの持ち物・技・性格・SP を取得する**。この手順を飛ばして名前だけを analyze_selection などの分析ツールへ渡してはいけません。名前だけだと「SP=0・持ち物なし・技なし」として計算され、実際の対戦と違う結論になります
-4. 取得した詳細（nature / evs(SP) / ability / item / moves）を付けて分析ツール（analyze_selection / analyze_matchup など）を呼ぶ
+3. get_match_turns（matchId）で、自分の行動ログ（技・交代・メガ）を取得する。空で返ることがあるが、それは記録が無いだけで異常ではない。そのときは選出と構築相性を中心に振り返る
+4. **load_party に party を渡し、自分のパーティの持ち物・技・性格・SP を取得する**。この手順を飛ばして名前だけを analyze_selection などの分析ツールへ渡してはいけません。名前だけだと「SP=0・持ち物なし・技なし」として計算され、実際の対戦と違う結論になります
+5. 取得した詳細（nature / evs(SP) / ability / item / moves）を付けて分析ツール（analyze_selection / analyze_matchup など）を呼ぶ
 
 - 分析ツールへ渡す自分のパーティは team（6 体）を使うこと。selfSelection（選出。シングル 3 体／ダブル 4 体）は選出の記録であってパーティ全体ではありません
 - load_party が「見つかりません」を返したら、保存済みパーティが無いということです。その旨を利用者に伝え、team の 6 体名だけを材料に一般論で話してください。名前だけでダメージ計算の数値を断定してはいけません
+
+行動ログ（get_match_turns）の読み方:
+
+- 記録されるのは**自分の行動だけ**。相手の行動・ダメージ・HP・命中は無いので、相手が何をしてきたかを断定しない
+- coverage.missingTurns の抜けは「何もしなかった」ではない。記録が点列であることを前提に話す
+- uncertain: true の行は技名の特定が不確か。断定しない
+- action = switch の direction = in は、交代だけでなく瀕死後の繰り出しも含む
 
 ## 振り返り回答の構成（完成品の形）
 振り返りを求められたら、次の構成で回答してください。事実（記録に基づく）と解釈（分析）を分け、数値はどのツールで得たかが分かるように書きます。

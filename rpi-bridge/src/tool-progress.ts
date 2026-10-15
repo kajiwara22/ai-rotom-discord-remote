@@ -35,7 +35,12 @@ const PARTY_TOOLS = new Set([
 ]);
 
 /** 対戦記録ツール。`list_` / `get_` の接頭辞で分類すると別の種別に落ちるため先に見る */
-const MATCH_TOOLS = new Set(["list_matches", "get_match", "get_party_from_matches"]);
+const MATCH_TOOLS = new Set([
+  "list_matches",
+  "get_match",
+  "get_match_turns",
+  "get_party_from_matches",
+]);
 
 /** 育成論の取り込み（ADR-0013） */
 const THEORY_TOOLS = new Set(["import_theory_from_url", "get_theory"]);
