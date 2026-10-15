@@ -12,12 +12,12 @@
   "dependencies": {
     "@duckdb/node-api": "1.5.5-r.4",
     "@modelcontextprotocol/sdk": "1.29.0",
-    "@nonz250/ai-rotom": "^1.2.0",
-    "better-sqlite3": "^13.0.1"
+    "@nonz250/ai-rotom": "^1.2.7",
+    "better-sqlite3": "^13.0.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
-    "tsx": "^4.0.0",
-    "typescript": "^5.7.0"
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.3"
   }
 }
