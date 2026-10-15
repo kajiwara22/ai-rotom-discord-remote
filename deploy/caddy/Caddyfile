@@ -85,6 +85,14 @@
 		reverse_proxy 127.0.0.1:{$PI_WEB_PORT}
 	}
 
+	@wake host {$WAKE_HOST}
+	handle @wake {
+		# EPG Station WOL Web UI（Pi ホストのユーザーサービス epg-wol-web.service）。
+		# 127.0.0.1:8000 を待ち受ける。操作系の POST があるため、
+		# 未定義ホストを弾く handle { abort } より前に置くこと。
+		reverse_proxy 127.0.0.1:{$WAKE_PORT}
+	}
+
 	# ワイルドカード証明書なので、DNS さえ引ければ任意のホスト名で到達しうる。
 	# 定義していないホスト名は接続を切る。
 	handle {

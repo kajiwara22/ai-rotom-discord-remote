@@ -30,6 +30,9 @@ services:
       # PI Web の待ち受けポート（既定 8504。変えている場合のみ指定する）。
       PI_WEB_PORT: ${PI_WEB_PORT:-8504}
 
+      WAKE_HOST: ${WAKE_HOST:?未設定です。.mise.local.toml に WAKE_HOST を追加してください}
+      WAKE_PORT: ${WAKE_PORT:-8000}
+
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       # 取得済み証明書と ACME アカウント鍵。
