@@ -16,7 +16,7 @@ import type {
 } from "./types.js";
 import { extractQuiz, renderStoredReply } from "./quiz-block.js";
 import { stripDsml } from "./dsml.js";
-import { runAsk, runAskForWeb } from "./ai-service.js";
+import { runAsk, runAskForWeb, chatCompletion } from "./ai-service.js";
 import {
   deleteExpiredSessions,
   resetSession,
@@ -39,12 +39,12 @@ import {
   getDefaultModelId,
   setDefaultModelId,
 } from "./conversation-manager.js";
-import { modelIds, isKnownModel } from "./model-registry.js";
+import { modelIds, isKnownModel, resolveModelDefinition } from "./model-registry.js";
 import { closeDb } from "./db.js";
 import { closeMatchRepository } from "./match-repository.js";
 import { createExecuteRaw, createRunTool, type ExecuteRaw, type RunTool } from "./tool-runner.js";
 import { webNamespace } from "./party-namespace.js";
-import { inspectReviewInput } from "./review-harness.js";
+import { inspectReviewInput, buildEvaluatorMessagesFromTools, parseVerdict } from "./review-harness.js";
 import { saveMatchReview, buildMatchReview } from "./match-reviews.js";
 
 const PORT = parseInt(process.env.PORT ?? "3210", 10);
@@ -691,6 +691,10 @@ async function handleReviewInspect(req: IncomingMessage, res: ServerResponse): P
 
   const issues = inspectReviewInput({ reply, calledTools, matchId, matchAtTimestamp });
 
+  // 評価役 LLM（ADR-0025）。常時実行し、判定と指摘だけを返す。
+  // 書き直しは pi 側が担い、その本文で再度この API を呼ぶ（保存は upsert で上書き）
+  const evaluator = await runReviewEvaluator(reply, calledTools, issues, matchId);
+
   // 検品の指摘は注記として回答へ足し、保存本文には含めない（ADR-0017）
   const finalReply =
     issues.length > 0
@@ -708,7 +712,8 @@ async function handleReviewInspect(req: IncomingMessage, res: ServerResponse): P
   }
 
   console.log(
-    `[review-inspect] match=${matchId ?? "(なし)"} issues=${issues.length} saved=${saved}`,
+    `[review-inspect] match=${matchId ?? "(なし)"} issues=${issues.length} ` +
+      `evaluator=${evaluator.ran ? (evaluator.pass ? "pass" : `fail(${evaluator.issues.length})`) : "skip"} saved=${saved}`,
   );
 
   res.writeHead(200, { "Content-Type": "application/json" });
@@ -716,11 +721,55 @@ async function handleReviewInspect(req: IncomingMessage, res: ServerResponse): P
     JSON.stringify({
       success: true,
       issues,
+      evaluator,
       saved,
       match_id: matchId ?? null,
       final_reply: finalReply,
     }),
   );
+}
+
+/** 評価役 LLM の結果（ADR-0025）。ran: false は評価できなかったことを示し、不合格とは区別する */
+type ReviewEvaluatorResult =
+  | { ran: true; pass: boolean; issues: string[]; model: string }
+  | { ran: false; reason: string };
+
+/**
+ * 検品 API の評価役 LLM。ask パイプラインの applyReviewHarness から評価と書き直しを除いた部分。
+ *
+ * 失敗しても検品 API 全体は成功させる（評価不能を不合格に置き換えない。ADR-0025）。
+ * 呼び出しは 1 回だけなので、chatCompletion の 240 秒タイムアウトがそのまま上限になる。
+ */
+async function runReviewEvaluator(
+  reply: string,
+  calledTools: string[],
+  mechanicalIssues: string[],
+  matchId: string | undefined,
+): Promise<ReviewEvaluatorResult> {
+  if (!OPENCODE_GO_API_KEY) {
+    return { ran: false, reason: "OPENCODE_GO_API_KEY が設定されていません" };
+  }
+  try {
+    const model = resolveModelDefinition(getDefaultModelId());
+    const result = await chatCompletion(
+      buildEvaluatorMessagesFromTools(reply, calledTools, mechanicalIssues),
+      [],
+      model,
+      OPENCODE_GO_API_KEY,
+      OPENCODE_GO_BASE_URL,
+      `review-inspect:${matchId ?? "unknown"}`,
+    );
+    const verdict = result.content ? parseVerdict(result.content) : null;
+    if (!verdict) {
+      console.warn("[review-inspect] 評価役の返答を解釈できませんでした");
+      return { ran: false, reason: "評価役の返答を解釈できませんでした" };
+    }
+    return { ran: true, pass: verdict.pass, issues: verdict.issues, model: result.model };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[review-inspect] 評価役の呼び出しに失敗しました: ${message}`);
+    return { ran: false, reason: message };
+  }
 }
 
 async function handleDiscordAsk(

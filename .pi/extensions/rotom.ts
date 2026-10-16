@@ -280,8 +280,15 @@ export default function rotomExtension(pi: ExtensionAPI) {
     {
       name: "get_match",
       label: "get_match",
-      description: "1つの対戦の記録を取得する。相手の構築6体・相手の先発・自分のパーティ名（party）と6体構成（team）・自分の先発と選出・勝敗・動画の該当位置が分かる。選出・先発の体数は battleFormat に応じ、シングルは選出 3 体／先発 1 体、ダブルは選出 4 体／先発 2 体。技やダメージなどの行動ログは記録されていないため、選出や構築相性の振り返りに使うこと。持ち物・技などのパーティ詳細が必要なら、party を load_party に渡して保存済みパーティを取得する。",
-      promptSnippet: "1つの対戦の記録を取得する。相手の構築6体・相手の先発・自分のパーティ名（party）と6体構成（team）・自分の先発と選出・勝敗・動画の該当位置が分かる。選出・先発の体数は battleFormat に応じ、シングルは選出 3 体／先発…",
+      description: "1つの対戦の選出と構築の記録を取得する。相手の構築6体・相手の先発・自分のパーティ名（party）と6体構成（team）・自分の先発と選出・勝敗・動画の該当位置が分かる。選出・先発の体数は battleFormat に応じ、シングルは選出 3 体／先発 1 体、ダブルは選出 4 体／先発 2 体。自分の選出は常にそろうが、相手の選出は見えた範囲だけのことがあり、ダブルでも 4 体そろわない（3 体で止まる）ことがある。記録に無い選出を推定で補わないこと。自分の行動ログ（技・交代・メガ）は get_match_turns で取得する。持ち物・技などのパーティ詳細が必要なら、party を load_party に渡して保存済みパーティを取得する。",
+      promptSnippet: "1つの対戦の選出と構築の記録を取得する。相手の構築6体・相手の先発・自分のパーティ名（party）と6体構成（team）・自分の先発と選出・勝敗・動画の該当位置が分かる。選出・先発の体数は battleFormat に応じ、シングルは選出 …",
+      parameters: Type.Object({ "matchId": Type.String({ description: "list_matches が返した matchId" }) }),
+    },
+    {
+      name: "get_match_turns",
+      label: "get_match_turns",
+      description: "1つの対戦の自分の行動ログ（技・交代・メガ）をターン順に取得する。記録されるのは自分の行動だけで、相手の行動・ダメージ・HP・命中は無い。行動ログの抽出は新しく解析した動画にのみ付くため、古い対戦では空で返る（エラーではない）。ターンの抜けもあり、抜けは「何もしなかった」を意味しない。coverage（turnsMax / turnsRecorded / missingTurns / rows）で記録の粗さを確認し、行の uncertain: true は技名の特定が不確かであることを示す。action = switch は交代だけでなく瀕死後の繰り出しも含む。",
+      promptSnippet: "1つの対戦の自分の行動ログ（技・交代・メガ）をターン順に取得する。記録されるのは自分の行動だけで、相手の行動・ダメージ・HP・命中は無い。行動ログの抽出は新しく解析した動画にのみ付くため、古い対戦では空で返る（エラーではない）。ターンの抜け…",
       parameters: Type.Object({ "matchId": Type.String({ description: "list_matches が返した matchId" }) }),
     },
     {
@@ -352,8 +359,8 @@ export default function rotomExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "review_inspect",
     label: "振り返り検品・保存",
-    description: "対戦振り返りの本文を検品し、match_reviews へ保存する。振り返りを書き終えたら本文を reply に渡して呼び、返ってきた final_reply を利用者への回答として提示する。",
-    promptSnippet: "対戦振り返りの本文を検品・保存する",
+    description: "対戦振り返りの本文を検品し、match_reviews へ保存する。機械検品の指摘（issues）と、評価役の判定（evaluator.pass）・指摘（evaluator.issues）を返す。evaluator.pass が false のときは、指摘をすべて反映して本文を書き直し、もう一度このツールを呼ぶこと（保存は呼ぶたびに上書きされる。書き直しは 1 回まで）。返ってきた final_reply を利用者への回答として提示する。",
+    promptSnippet: "対戦振り返りの本文を検品・保存する（不合格なら書き直して再呼び出し）",
     parameters: Type.Object({
       reply: Type.String({ description: "検品・保存する振り返り本文" }),
     }),
@@ -375,7 +382,7 @@ export default function rotomExtension(pi: ExtensionAPI) {
       }
       return {
         content: [{ type: "text", text: data.final_reply ?? params.reply }],
-        details: { issues: data.issues ?? [], saved: data.saved ?? false },
+        details: { issues: data.issues ?? [], evaluator: data.evaluator ?? null, saved: data.saved ?? false },
       };
     },
   });

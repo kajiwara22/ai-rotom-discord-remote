@@ -200,10 +200,15 @@ const ACCEPTANCE_CRITERIA = [
   "公開されていない使用率・勝率の % を断定していない",
 ];
 
-/** 評価役 LLM への入力メッセージを組み立てる */
-export function buildEvaluatorMessages(
+/**
+ * 評価役 LLM への入力メッセージを、ツール名の配列から組み立てる。
+ *
+ * 検品 API（pi 連携の /api/reviews/inspect）はメッセージ履歴を持たないため、
+ * extension が捕捉した called_tools を直接受ける（ADR-0021 / ADR-0025）。
+ */
+export function buildEvaluatorMessagesFromTools(
   reply: string,
-  messages: ChatMessage[],
+  calledTools: string[],
   mechanicalIssues: string[],
 ): ChatMessage[] {
   const system = `あなたはポケモンチャンピオンズ対戦振り返りの評価役です。
@@ -224,7 +229,7 @@ pass=false にするのは、完成条件への明確な違反がある場合だ
     reply,
     "",
     "【このターンに呼ばれたツール】",
-    calledToolNames(messages).join(", ") || "なし",
+    calledTools.join(", ") || "なし",
     "",
     "【機械的検品の指摘】",
     mechanicalIssues.length > 0 ? mechanicalIssues.join(" / ") : "なし",
@@ -234,6 +239,15 @@ pass=false にするのは、完成条件への明確な違反がある場合だ
     { role: "system", content: system },
     { role: "user", content: user },
   ];
+}
+
+/** 評価役 LLM への入力メッセージを組み立てる（ask パイプライン用） */
+export function buildEvaluatorMessages(
+  reply: string,
+  messages: ChatMessage[],
+  mechanicalIssues: string[],
+): ChatMessage[] {
+  return buildEvaluatorMessagesFromTools(reply, calledToolNames(messages), mechanicalIssues);
 }
 
 export interface ReviewVerdict {
