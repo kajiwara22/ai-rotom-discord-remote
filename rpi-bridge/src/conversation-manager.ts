@@ -491,6 +491,26 @@ const QUIZ_INSTRUCTIONS = `
 このとき、新しいクイズを求められていなければブロックは書かない。`;
 
 /**
+ * COAT V14.0 から採用した助言の作法（ADR-0023）。
+ *
+ * 保存済みプロンプトが既定プロンプトを上書きするため、ここへ焼き込むと
+ * 既存利用者へ届かない。MODE_INSTRUCTIONS / QUIZ_INSTRUCTIONS と同じく
+ * 実行時に付加する。
+ *
+ * kids（低学年）には付けない。200 文字制限と「感覚で説明する」方針に
+ * 対して、この項目は両立しにくいため（ADR-0023）。
+ */
+const COAT_INSTRUCTIONS = `
+
+## 助言の作法（COAT V14.0 より採用）
+
+- 判断は、その時点で観測できていた情報だけで評価すること。対戦後に判明した相手の型・持ち物・後発を根拠に「あの選出は誤りだった」と断定しない。区別できなかった可能性は「当時は区別できなかった」と書く。
+- 構築（パーティ）の変更を提案するときは、効果だけでなく、通常時に失うもの（代償）と例外、数値の出所（ツール結果か一般論か）、推定の幅（境界付近なら優劣は未確定）、有効期限（レギュレーションや使用率の時点）を添える。
+- 「弱点がある」「回答が 1 つしかない」は修正候補を作る警報であり、採用・不採用の結論ではない。指摘は修正候補とセットで示し、点数化しない。
+- 頻度の出所を書くこと。使用率ランキングは順位のみで % は公開されていない。使用率を妨害の発生率として扱わない。頻度が不明なら、修正の優劣は未確定と明記する。
+- この作法は助言の整理術であり、これを使うと勝率が上がるという実測はない（元資料は実戦検証 n=0）。`;
+
+/**
  * 設定画面で編集する対象のプロンプト。
  * モード指示は実行時に付与するため、ここには含めない。
  * これを含めて返すと、保存のたびにモード指示が本文へ焼き込まれて増殖する。
@@ -509,16 +529,18 @@ export function getSystemPromptForUser(userId: string): string {
   const base = getStoredSystemPrompt(userId);
 
   if (userId === "__discord__") {
-    return base + DISCORD_RESTRICTIONS;
+    return base + DISCORD_RESTRICTIONS + COAT_INSTRUCTIONS;
   }
 
   // ユーザーの表示モードに応じた応答スタイル指示を付与する。
   // クイズは選択肢 UI を持つ Web UI 専用のため、Discord には付けない（ADR-0011）
   const user = getUser(userId);
   if (user) {
-    return base + MODE_INSTRUCTIONS[user.mode] + QUIZ_INSTRUCTIONS;
+    // COAT の作法は kids を除く（ADR-0023）
+    const coat = user.mode === "kids" ? "" : COAT_INSTRUCTIONS;
+    return base + MODE_INSTRUCTIONS[user.mode] + coat + QUIZ_INSTRUCTIONS;
   }
-  return base + QUIZ_INSTRUCTIONS;
+  return base + COAT_INSTRUCTIONS + QUIZ_INSTRUCTIONS;
 }
 
 export function setSystemPromptForUser(userId: string, promptText: string): void {
