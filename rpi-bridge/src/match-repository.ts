@@ -321,8 +321,15 @@ export async function getMatch(matchId: string): Promise<unknown> {
     "この記録は選出と構築まで。自分の行動ログ（技・交代・メガ）は get_match_turns に matchId を渡すと取得できる（行動ログが無い対戦もある）。相手の行動・ダメージ・HP はどの記録にも無い",
     `team はこの対戦で使ったパーティ 6 体、party はそのパーティ名。分析ツール（analyze_selection など）で振り返る前に、まず load_party に party を渡して持ち物・技・性格・SP を取得すること。名前だけを渡すと SP=0・持ち物なしとして計算され、実戦と違う結論になる。分析には team（6 体）を使い、selfSelection（選出 ${selectionCount} 体）をパーティ全体と混同しないこと`,
   ];
-  if (presentOrUndefined(row.opponentSelection) === undefined) {
+  const opponentSelection = presentOrUndefined(row.opponentSelection);
+  if (opponentSelection === undefined) {
     notes.push(`相手の選出 ${selectionCount} 体は未記録。相手について分かるのは構築 6 体と先発 ${leadCount} 体のみ`);
+  } else if (opponentSelection.length < selectionCount) {
+    // 相手の選出は見えた範囲だけ記録される。相手が有利に展開すると、
+    // ダブルでも 4 体そろわず 2〜3 体で止まることがある（ADR-0024）。
+    notes.push(
+      `相手の選出は見えた範囲のみ（${opponentSelection.length} 体／本来 ${selectionCount} 体）。相手が有利に展開すると、残りの選出は最後まで分からないことがある。記録に無い選出を推定で補って断定しないこと`,
+    );
   }
 
   return {
@@ -335,7 +342,7 @@ export async function getMatch(matchId: string): Promise<unknown> {
     url: watchUrl(row.videoId, row.startSec),
     opponentTeam: row.opponentTeam,
     opponentLead: row.opponentLead,
-    opponentSelection: presentOrUndefined(row.opponentSelection),
+    opponentSelection,
     selfLead: row.selfLead,
     selfSelection: row.selfSelection,
     party: row.selfPartySlug ?? undefined,
