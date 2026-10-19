@@ -93,6 +93,14 @@
 		reverse_proxy 127.0.0.1:{$WAKE_PORT}
 	}
 
+	@iphone host {$IPHONE_HOST}
+	handle @iphone {
+		# iPhone バックアップ Web UI（Pi ホストのユーザーサービス
+		# iphone-export-web.service）。127.0.0.1:8001 を待ち受ける。
+		# 実行中はログをポーリングするため、応答は短い。
+		reverse_proxy 127.0.0.1:{$IPHONE_PORT}
+	}
+
 	# ワイルドカード証明書なので、DNS さえ引ければ任意のホスト名で到達しうる。
 	# 定義していないホスト名は接続を切る。
 	handle {

@@ -33,6 +33,9 @@ services:
       WAKE_HOST: ${WAKE_HOST:?未設定です。.mise.local.toml に WAKE_HOST を追加してください}
       WAKE_PORT: ${WAKE_PORT:-8000}
 
+      IPHONE_HOST: ${IPHONE_HOST:?未設定です。.mise.local.toml に IPHONE_HOST を追加してください}
+      IPHONE_PORT: ${IPHONE_PORT:-8001}
+
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       # 取得済み証明書と ACME アカウント鍵。
