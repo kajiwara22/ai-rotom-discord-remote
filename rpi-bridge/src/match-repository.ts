@@ -6,10 +6,16 @@
  * 解析側が差し替えた瞬間から新しいデータで答えられる。
  * 詳しい経緯は docs/adr/ADR-0010.md を参照。
  *
- * このデータに相手の行動・ダメージ・HP は含まれない。扱えるのは選出・構築と、
- * 自分側の行動ログ（技・交代・メガ）までであり、その制約は応答の notes で AI に伝える。
+ * 選出・構築に加えて、シーズン・レギュレーション・ランクの文脈列も持つ
+ * （docs/adr/ADR-0030.md）。シーズンは `seasonSource` が inferred のことがあり、
+ * その場合は動画タイトルの録画日からの推定なので断定させない。
+ *
  * 行動ログは `turns.parquet` に別オブジェクトとして入り、get_match_turns が読む
- * （docs/adr/ADR-0022.md）。自分の行動だけであり、ターンの抜けも広い。
+ * （docs/adr/ADR-0022.md）。解析側の v2 スキーマ（ADR-0039）で `side` が付き、
+ * 相手の行動も記録される動画がある。ただし対応済みの動画は限られるため、
+ * 「opponent の行が無い＝相手が何もしなかった」ではない。
+ * HP の観測は `boards.parquet` に分かれていて（ADR-0039 決定9）、自分は実数・
+ * 相手は % という非対称な型で持つ。観測が無いターンは欠測であって全快ではない。
  *
  * 解析側が自分のパーティ名（selfPartySlug）と 6 体構成（selfTeam）を Parquet に
  * 埋め込むようになった（docs/adr/ADR-0012.md）。get_match / list_matches がそれらを
@@ -20,6 +26,7 @@ import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
 const BUCKET = process.env.R2_BUCKET_NAME ?? "pcc-data";
 const OBJECT_KEY = process.env.PCC_PARQUET_KEY ?? "index/matches.parquet";
 const TURNS_KEY = process.env.PCC_TURNS_KEY ?? "index/turns.parquet";
+const BOARDS_KEY = process.env.PCC_BOARDS_KEY ?? "index/boards.parquet";
 
 /** 技名の特定が不確かとみなす確信度のしきい値（docs/adr/ADR-0022.md） */
 const UNCERTAIN_CONFIDENCE = 0.8;
@@ -51,6 +58,13 @@ interface MatchRow {
   selfSelection: string[];
   selfTeam: string[];
   selfPartySlug: string | null;
+  season: string | null;
+  seasonSource: string | null;
+  regulation: string | null;
+  rankTierStart: string | null;
+  rankNumberStart: number | null;
+  rankTierEnd: string | null;
+  rankNumberEnd: number | null;
 }
 
 /** パーティごとの集計行（get_party_from_matches の一覧用） */
@@ -62,8 +76,9 @@ interface PartyAggRow {
 }
 
 /**
- * turns.parquet の 1 行。
- * 自分の行動だけが入り、相手の行動・ダメージ・HP は含まれない（docs/adr/ADR-0022.md）。
+ * turns.parquet の 1 行（v2 スキーマ。docs/adr/ADR-0039.md）。
+ * `side` は self / opponent。相手の行動は解析側が対応した動画にのみ入る。
+ * `slot` はダブルの場の位置であって個体ではない（交代で中身が変わる）。
  * matches.parquet の列（title / result / selfPartySlug / startSec）は JOIN で補う。
  */
 interface TurnRow {
@@ -75,10 +90,30 @@ interface TurnRow {
   move: string | null;
   direction: string | null;
   confidence: number;
+  side: string | null;
+  slot: number | null;
+  source: string | null;
   title: string;
   result: string;
   selfPartySlug: string | null;
   startSec: number;
+}
+
+/**
+ * boards.parquet の 1 行（ターン開始時点の盤面スナップショット）。
+ * 自分は実数（hpCurrent/hpMax）、相手は %（hpPercent）。使わない列は null。
+ * 読めなかったスロットは行そのものが無い＝欠測（docs/adr/ADR-0039.md 決定2）。
+ */
+interface BoardRow {
+  turn: number;
+  side: string;
+  slot: number;
+  species: string;
+  hpKind: string | null;
+  hpCurrent: number | null;
+  hpMax: number | null;
+  hpPercent: number | null;
+  isMega: boolean | null;
 }
 
 /**
@@ -202,6 +237,7 @@ async function query<T = MatchRow>(sql: string, values: string[]): Promise<T[]> 
 /** Parquet の場所。利用者の入力は含まれないため、そのまま SQL に埋める */
 const SOURCE = `read_parquet(${quote(`s3://${BUCKET}/${OBJECT_KEY}`)})`;
 const TURNS_SOURCE = `read_parquet(${quote(`s3://${BUCKET}/${TURNS_KEY}`)})`;
+const BOARDS_SOURCE = `read_parquet(${quote(`s3://${BUCKET}/${BOARDS_KEY}`)})`;
 
 /** 動画の該当位置を指す URL */
 function watchUrl(videoId: string, startSec: number): string {
@@ -251,7 +287,7 @@ export async function listMatches(video: string): Promise<unknown> {
   }
 
   const rows = await query(
-    `SELECT matchId, title, result, startSec, endSec, opponentLead, videoTitle, publishedAt, selfPartySlug
+    `SELECT matchId, title, result, startSec, endSec, opponentLead, videoTitle, publishedAt, selfPartySlug, season
      FROM ${SOURCE}
      WHERE videoId = $1
      ORDER BY startSec`,
@@ -291,6 +327,7 @@ export async function listMatches(video: string): Promise<unknown> {
       result: row.result,
       opponentLead: row.opponentLead,
       party: row.selfPartySlug ?? undefined,
+      season: row.season ?? undefined,
       url: watchUrl(videoId, row.startSec),
     })),
     notes,
@@ -318,9 +355,14 @@ export async function getMatch(matchId: string): Promise<unknown> {
   const row = rows[0];
   const { selection: selectionCount, lead: leadCount } = selectionAndLeadSize(row.battleFormat);
   const notes = [
-    "この記録は選出と構築まで。自分の行動ログ（技・交代・メガ）は get_match_turns に matchId を渡すと取得できる（行動ログが無い対戦もある）。相手の行動・ダメージ・HP はどの記録にも無い",
+    "この記録は選出と構築まで。行動（技・交代・メガ）とターン開始時点の HP は get_match_turns に matchId を渡すと取得できる（記録がある対戦のみ）",
     `team はこの対戦で使ったパーティ 6 体、party はそのパーティ名。分析ツール（analyze_selection など）で振り返る前に、まず load_party に party を渡して持ち物・技・性格・SP を取得すること。名前だけを渡すと SP=0・持ち物なしとして計算され、実戦と違う結論になる。分析には team（6 体）を使い、selfSelection（選出 ${selectionCount} 体）をパーティ全体と混同しないこと`,
   ];
+  if (row.seasonSource === "inferred") {
+    notes.push(
+      "context.season は seasonSource=inferred（動画タイトルの録画日からの推定）。確定事実として書かず「推定」と添えること",
+    );
+  }
   const opponentSelection = presentOrUndefined(row.opponentSelection);
   if (opponentSelection === undefined) {
     notes.push(`相手の選出 ${selectionCount} 体は未記録。相手について分かるのは構築 6 体と先発 ${leadCount} 体のみ`);
@@ -340,6 +382,7 @@ export async function getMatch(matchId: string): Promise<unknown> {
     battleFormat: row.battleFormat,
     result: row.result,
     url: watchUrl(row.videoId, row.startSec),
+    context: buildContext(row),
     opponentTeam: row.opponentTeam,
     opponentLead: row.opponentLead,
     opponentSelection,
@@ -349,6 +392,37 @@ export async function getMatch(matchId: string): Promise<unknown> {
     team: presentOrUndefined(row.selfTeam),
     notes,
   };
+}
+
+/**
+ * 対戦の文脈（シーズン・レギュレーション・ランク）。記録が無ければキーごと省く。
+ *
+ * `seasonSource` は `ocr`（画面から読めた）/ `inferred`（動画タイトルの録画日からの推定）/
+ * `manual`（人手）のいずれか。推定を確定事実として書かせないため、値と一緒に返す。
+ */
+function buildContext(row: MatchRow): Record<string, unknown> | undefined {
+  const context: Record<string, unknown> = {};
+  if (row.season !== null) context.season = row.season;
+  if (row.seasonSource !== null) context.seasonSource = row.seasonSource;
+  if (row.regulation !== null) context.regulation = row.regulation;
+
+  const rankStart = rankEntry(row.rankTierStart, row.rankNumberStart);
+  const rankEnd = rankEntry(row.rankTierEnd, row.rankNumberEnd);
+  if (rankStart !== undefined) context.rankStart = rankStart;
+  if (rankEnd !== undefined) context.rankEnd = rankEnd;
+
+  return Object.keys(context).length > 0 ? context : undefined;
+}
+
+function rankEntry(
+  tier: string | null,
+  num: number | null,
+): Record<string, unknown> | undefined {
+  if (tier === null && num === null) return undefined;
+  const entry: Record<string, unknown> = {};
+  if (tier !== null) entry.tier = tier;
+  if (num !== null) entry.number = num;
+  return entry;
 }
 
 /**
@@ -372,6 +446,7 @@ export async function getMatchTurns(matchId: string): Promise<unknown> {
 
   const rows = await query<TurnRow>(
     `SELECT t.videoId, t.turn, t.sec, t.action, t.species, t.move, t.direction, t.confidence,
+            t.side, t.slot, t.source,
             m.title, m.result, m.selfPartySlug, m.startSec
      FROM ${TURNS_SOURCE} t
      JOIN ${SOURCE} m ON m.matchId = t.matchId
@@ -379,6 +454,9 @@ export async function getMatchTurns(matchId: string): Promise<unknown> {
      ORDER BY t.turn, t.sec`,
     [trimmed],
   );
+
+  // boards は別テーブル（ADR-0039 決定9）。未生成の環境でも turns は返せるようにする
+  const boards = await queryBoards(trimmed);
 
   if (rows.length === 0) {
     const exists = await query<{ matchId: string }>(
@@ -391,11 +469,12 @@ export async function getMatchTurns(matchId: string): Promise<unknown> {
         error: `対戦記録が見つかりませんでした（matchId: ${trimmed}）`,
       };
     }
+    // boards は行動ログと同じ再走で生成されるため、行動 0 件なら盤面も無い前提で扱う
     return {
       success: true,
       matchId: trimmed,
       turns: {},
-      coverage: { turnsMax: 0, turnsRecorded: 0, missingTurns: [], rows: 0 },
+      coverage: { turnsMax: 0, turnsRecorded: 0, missingTurns: [], rows: 0, boards: 0 },
       notes: [
         "この対戦には行動ログが無い。行動ログの抽出は新しく解析した動画にのみ付くため、古い対戦では空になる",
         "選出と構築相性を中心に振り返ること",
@@ -403,16 +482,24 @@ export async function getMatchTurns(matchId: string): Promise<unknown> {
     };
   }
 
-  const turns: Record<string, Record<string, unknown>[]> = {};
+  // 1 ターン = 行動（actions）とターン開始時点の盤面（boards）。
+  // HP は行動と同じ粒度で取れないので層を分けてある（ADR-0039 決定2）
+  const turns: Record<
+    string,
+    { actions: Record<string, unknown>[]; boards?: Record<string, unknown>[] }
+  > = {};
   let hasUncertain = false;
   for (const row of rows) {
     const action: Record<string, unknown> = {
       sec: row.sec,
+      side: row.side ?? "self",
       action: row.action,
       species: row.species,
       confidence: row.confidence,
       url: watchUrl(row.videoId, row.sec),
     };
+    if (row.slot !== null) action.slot = row.slot;
+    if (row.source !== null) action.source = row.source;
     if (row.move !== null) action.move = row.move;
     if (row.direction !== null) action.direction = row.direction;
     if (row.confidence < UNCERTAIN_CONFIDENCE) {
@@ -420,20 +507,36 @@ export async function getMatchTurns(matchId: string): Promise<unknown> {
       hasUncertain = true;
     }
     const key = String(row.turn);
-    (turns[key] ??= []).push(action);
+    (turns[key] ??= { actions: [] }).actions.push(action);
+  }
+
+  for (const board of boards) {
+    const key = String(board.turn);
+    const entry = (turns[key] ??= { actions: [] });
+    (entry.boards ??= []).push(boardEntry(board));
   }
 
   const present = new Set(rows.map((row) => row.turn));
-  const turnsMax = Math.max(...present);
+  const boardTurns = new Set(boards.map((board) => board.turn));
+  const turnsMax = Math.max(...present, ...boardTurns);
   const missingTurns: number[] = [];
   for (let turn = 1; turn <= turnsMax; turn++) {
     if (!present.has(turn)) missingTurns.push(turn);
   }
 
+  const bySide = { self: 0, opponent: 0 };
+  for (const row of rows) {
+    if (row.side === "opponent") bySide.opponent += 1;
+    else bySide.self += 1;
+  }
+
   const first = rows[0];
   const notes = [
-    "この行動ログは自分の行動のみ。相手の行動・ダメージ・HP・命中は記録されていない",
+    "各ターンは actions（行動）と boards（ターン開始時点の盤面）に分かれる。actions の side は self=自分／opponent=相手",
+    "side=opponent の行動は、解析側が相手行動の抽出に対応した動画にだけ入る。opponent の行が無い動画では未記録であって「相手が何もしなかった」意味ではない",
     `記録は点列で、抜けているターンがある（missingTurns: ${missingTurns.join(", ") || "なし"}）。抜けは「何もしなかった」を意味しない`,
+    "boards は HP の観測。自分は実数（current/max）、相手は %（value）。boards が無いターン・スロットは観測できなかっただけで、全快や瀕死を意味しない。盤面の記録自体が無い対戦もある",
+    "slot はダブルの場の位置であって個体ではない。交代で中身が変わるので species とセットで読む",
     "action = switch は交代だけでなく、瀕死後の繰り出しも含む。direction = in を「交代で場に出た」と断定しないこと",
     "各行動の url はその行動の瞬間（動画内の秒）を指す",
   ];
@@ -452,10 +555,44 @@ export async function getMatchTurns(matchId: string): Promise<unknown> {
       turnsRecorded: present.size,
       missingTurns,
       rows: rows.length,
+      boards: boards.length,
+      bySide,
     },
     turns,
     notes,
   };
+}
+
+/** boards.parquet を読む。未生成の環境では空を返す（turns だけは返せるようにする） */
+async function queryBoards(matchId: string): Promise<BoardRow[]> {
+  try {
+    return await query<BoardRow>(
+      `SELECT turn, side, slot, species, hpKind, hpCurrent, hpMax, hpPercent, isMega
+       FROM ${BOARDS_SOURCE}
+       WHERE matchId = $1
+       ORDER BY turn, side, slot`,
+      [matchId],
+    );
+  } catch (error) {
+    console.log(`[match] boards.parquet を読めませんでした: ${String(error)}`);
+    return [];
+  }
+}
+
+/** boards の 1 行を応答の形にする。HP の有無は kind で判別する */
+function boardEntry(row: BoardRow): Record<string, unknown> {
+  const entry: Record<string, unknown> = {
+    side: row.side,
+    slot: row.slot,
+    species: row.species,
+  };
+  if (row.hpKind === "actual" && row.hpCurrent !== null) {
+    entry.hp = { kind: "actual", current: row.hpCurrent, max: row.hpMax };
+  } else if (row.hpKind === "percent" && row.hpPercent !== null) {
+    entry.hp = { kind: "percent", value: row.hpPercent };
+  }
+  if (row.isMega === true) entry.mega = true;
+  return entry;
 }
 
 /**
@@ -544,7 +681,7 @@ export async function getPartyFromMatches(name?: string): Promise<unknown> {
     })),
     notes: [
       `全 ${total} 戦中、直近 10 戦を表示`,
-      "この一覧に相手の行動・ダメージ・HP は無い。自分の行動ログ（技・交代・メガ）は get_match_turns に matchId を渡すと取得できる（行動ログが無い対戦もある）",
+      "この一覧に相手の行動・HP は無い。行動（技・交代・メガ）とターン開始時点の HP は get_match_turns に matchId を渡すと取得できる（記録がある対戦のみ）",
     ],
   };
 }

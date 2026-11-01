@@ -280,15 +280,15 @@ export default function rotomExtension(pi: ExtensionAPI) {
     {
       name: "get_match",
       label: "get_match",
-      description: "1つの対戦の選出と構築の記録を取得する。相手の構築6体・相手の先発・自分のパーティ名（party）と6体構成（team）・自分の先発と選出・勝敗・動画の該当位置が分かる。選出・先発の体数は battleFormat に応じ、シングルは選出 3 体／先発 1 体、ダブルは選出 4 体／先発 2 体。自分の選出は常にそろうが、相手の選出は見えた範囲だけのことがあり、ダブルでも 4 体そろわない（3 体で止まる）ことがある。記録に無い選出を推定で補わないこと。自分の行動ログ（技・交代・メガ）は get_match_turns で取得する。持ち物・技などのパーティ詳細が必要なら、party を load_party に渡して保存済みパーティを取得する。",
+      description: "1つの対戦の選出と構築の記録を取得する。相手の構築6体・相手の先発・自分のパーティ名（party）と6体構成（team）・自分の先発と選出・勝敗・動画の該当位置が分かる。選出・先発の体数は battleFormat に応じ、シングルは選出 3 体／先発 1 体、ダブルは選出 4 体／先発 2 体。自分の選出は常にそろうが、相手の選出は見えた範囲だけのことがあり、ダブルでも 4 体そろわない（3 体で止まる）ことがある。記録に無い選出を推定で補わないこと。context にはシーズン・レギュレーション・ランクが入る（記録があるときのみ）。seasonSource が inferred なら動画タイトルの録画日からの推定なので、確定事実として書かず「推定」と添えること。行動（技・交代・メガ）と HP は get_match_turns で取得する。持ち物・技などのパーティ詳細が必要なら、party を load_party に渡して保存済みパーティを取得する。",
       promptSnippet: "1つの対戦の選出と構築の記録を取得する。相手の構築6体・相手の先発・自分のパーティ名（party）と6体構成（team）・自分の先発と選出・勝敗・動画の該当位置が分かる。選出・先発の体数は battleFormat に応じ、シングルは選出 …",
       parameters: Type.Object({ "matchId": Type.String({ description: "list_matches が返した matchId" }) }),
     },
     {
       name: "get_match_turns",
       label: "get_match_turns",
-      description: "1つの対戦の自分の行動ログ（技・交代・メガ）をターン順に取得する。記録されるのは自分の行動だけで、相手の行動・ダメージ・HP・命中は無い。行動ログの抽出は新しく解析した動画にのみ付くため、古い対戦では空で返る（エラーではない）。ターンの抜けもあり、抜けは「何もしなかった」を意味しない。coverage（turnsMax / turnsRecorded / missingTurns / rows）で記録の粗さを確認し、行の uncertain: true は技名の特定が不確かであることを示す。action = switch は交代だけでなく瀕死後の繰り出しも含む。",
-      promptSnippet: "1つの対戦の自分の行動ログ（技・交代・メガ）をターン順に取得する。記録されるのは自分の行動だけで、相手の行動・ダメージ・HP・命中は無い。行動ログの抽出は新しく解析した動画にのみ付くため、古い対戦では空で返る（エラーではない）。ターンの抜け…",
+      description: "1つの対戦の行動（技・交代・メガ）とターン開始時点の HP をターン順に取得する。各ターンは actions（行動）と boards（盤面）に分かれる。actions の side は self=自分／opponent=相手で、side=opponent は解析側が相手行動の抽出に対応した動画にだけ入る（opponent の行が無い＝相手が何もしなかった、ではない）。boards は HP の観測で、自分は実数（current/max）、相手は %（value）。boards が無いターン・スロットは観測できなかっただけで、全快や瀕死を意味しない。slot はダブルの場の位置であって個体ではない。source は template（描画テンプレート）／vlm（画像読取）／manual（人手）。行動ログの抽出は新しく解析した動画にのみ付くため、記録が無い対戦は空で返る（エラーではない）。ターンの抜けもあり、抜けは「何もしなかった」を意味しない。coverage（turnsMax / turnsRecorded / missingTurns / rows / boards / bySide）で記録の粗さを確認し、行の uncertain: true は技名の特定が不確かであることを示す。action = switch は交代だけでなく瀕死後の繰り出しも含む。",
+      promptSnippet: "1つの対戦の行動（技・交代・メガ）とターン開始時点の HP をターン順に取得する。各ターンは actions（行動）と boards（盤面）に分かれる。actions の side は self=自分／opponent=相手で、side=o…",
       parameters: Type.Object({ "matchId": Type.String({ description: "list_matches が返した matchId" }) }),
     },
     {

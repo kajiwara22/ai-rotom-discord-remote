@@ -92,6 +92,14 @@ function boundTheoryBody(data: Json): Json {
   };
 }
 
+/** uncertain とみなす確信度のしきい値。match-repository の UNCERTAIN_CONFIDENCE と揃える */
+const UNCERTAIN_CONFIDENCE = 0.8;
+/**
+ * get_match_turns の目標サイズ。ここを超えたら boards（HP 観測）を落とす。
+ * 素通し上限（PASSTHROUGH_LIMIT）に余裕を残し、notes の追記で壊れないようにする
+ */
+const MATCH_TURNS_SOFT_LIMIT = 5000;
+
 const FORMATTERS: Record<string, Formatter> = {
   // 特性は名前（abilities / abilitiesJa）だけが返り、効果は入っていない。
   // 効果を書かせるとモデルが記憶（従来作）で補うため、get_ability_info での裏取りを促す
@@ -137,6 +145,39 @@ const FORMATTERS: Record<string, Formatter> = {
       pokemon2PriorityMoves: d.pokemon2PriorityMoves,
       typeSummary: d.typeSummary,
     };
+  },
+
+  // 実測 5,833 字（boards 14 行の対戦）。素通し上限 5,000 を超えると JSON が
+  // 構造の途中で壊れるため、判断を変えない冗長さだけを削る。
+  // - confidence は uncertain の判定にしか使わないので確定行では落とす
+  // - source の template と slot の 0 は既定値なので落とす
+  // - url はターン内の先頭行動にだけ残す（ディープリンクの基準点）
+  // 行動の順序・side・species・move・boards は削らない（そこが判断材料）。
+  get_match_turns: (d) => {
+    const turns = (d.turns ?? {}) as Record<string, { actions?: unknown; boards?: unknown }>;
+
+    const build = (includeBoards: boolean): Record<string, unknown> => {
+      const out: Record<string, unknown> = {};
+      for (const [turn, value] of Object.entries(turns)) {
+        const actions = asArray(value.actions).map((action, index) => {
+          const entry: Json = { ...action };
+          if (num(action.confidence) >= UNCERTAIN_CONFIDENCE) delete entry.confidence;
+          if (entry.slot === 0) delete entry.slot;
+          if (entry.source === "template") delete entry.source;
+          if (index > 0) delete entry.url;
+          return entry;
+        });
+        const boards = asArray(value.boards);
+        out[turn] = includeBoards && boards.length > 0 ? { actions, boards } : { actions };
+      }
+      return out;
+    };
+
+    // boards は行動より優先度が低い。盤面込みで上限を超えるなら盤面だけ落とし、
+    // 行動の並び（判断の本体）は必ず残す
+    const withBoards = { ...d, turns: build(true) };
+    if (JSON.stringify(withBoards).length <= MATCH_TURNS_SOFT_LIMIT) return withBoards;
+    return { ...d, turns: build(false) };
   },
 
   // 実測 5,692,717 字（候補プール無指定）。1 候補ごとに全技のダメージが入る
