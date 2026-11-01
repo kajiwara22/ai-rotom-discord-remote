@@ -17,10 +17,15 @@ Discord スラッシュコマンド (`/ask`, `/reset`) を受け付け、Cloudfl
 
 ### worker/
 ```bash
-npm run dev        # wrangler dev
-npm run deploy     # wrangler deploy
-npm run typecheck  # tsc --noEmit
+npm run typecheck  # tsc --noEmit（Raspberry Pi 側で実行できるのはこれだけ）
 ```
+
+worker/ の **`wrangler` は devDependencies に入れていない**。理由は2つ:
+
+- Raspberry Pi 上では `wrangler dev` が動かない。`workerd` が tcmalloc の mmap 確保に失敗して `Aborted` になる（`workerd --version` すら通らない）
+- Raspberry Pi 上で `wrangler login` をしていない（認証情報が無い）ため `wrangler deploy` もできない
+
+deploy は**別 PC から**行う。`npx wrangler@4 deploy` のようにバージョンを指定して実行する（`compatibility_date` は `wrangler.toml` で固定されている）。Pi での型チェックに必要なのは `typescript` と `@cloudflare/workers-types` だけ。
 
 ### rpi-bridge/
 ```bash
@@ -39,6 +44,8 @@ npm run dev:inspect # node --inspect=0.0.0.0:9229 --import tsx src/index.ts
 
 ## wrangler.toml の注意点
 
+`worker/wrangler.toml` は別 PC からのデプロイにだけ使う（このリポジトリを Raspberry Pi で動かしている側では wrangler を実行しない）。
+
 `worker/wrangler.toml` には Durable Object の**削除マイグレーション**が定義されている:
 ```toml
 [[migrations]]
@@ -49,8 +56,20 @@ deleted_classes = ["ConversationSession"]
 
 ## 環境変数
 
+**環境変数の管理は mise を基本とする**。実値は `[env]` を持つ `.mise.local.toml` に置き、Git にはコミットしない（`.gitignore` 済み）。`.env` / `.env.example` はテンプレート兼ドキュメントであり、**rpi-bridge のコードは `.env` を読まない**（dotenv 依存も `--env-file` も使っていない）。mise が有効でないシェルから起動すると値が入らない点に注意する。
+
+| 場所 | 内容 |
+|---|---|
+| `rpi-bridge/.mise.local.toml` | rpi-bridge の実行時環境変数（`OPENCODE_GO_*`, `R2_*`, `AI_ROTOM_*`, `DATABASE_PATH` など）と `[tools] node` |
+| `deploy/caddy/.mise.local.toml` | Caddy の `[env]` と `mise run` タスク。テンプレートは `.mise.toml.example` |
+| `worker/.dev.vars` | Wrangler 用。mise 管理外（別 PC からデプロイするため） |
+
+- 初回とファイル追加時は `mise trust` が必要。未信頼のディレクトリでは `[env]` が無視される。
+- 設定したら `mise env` で実際に export されるか確認する（値を目視で確認するときは単体で叩かないこと。`grep` などで必要なキーだけ見る）。
+- 変数を追加・変更したら `rpi-bridge/.env.example` と README の表も同じ内容にそろえる（`.env.example` が仕様の一次情報）。
+
 ### worker/ (.dev.vars.example)
-BOT トークンや CF-Access 認証情報を含む。本番では `wrangler secret put` で設定する想定。
+BOT トークンや CF-Access 認証情報を含む。本番では `wrangler secret put` で設定する想定（別 PC から実行する。Pi 側では secret を触らない）。
 
 ### rpi-bridge/ (.env.example)
 - `OPENCODE_GO_API_KEY`, `OPENCODE_GO_BASE_URL` — OpenCode Go API の認証情報
@@ -58,6 +77,7 @@ BOT トークンや CF-Access 認証情報を含む。本番では `wrangler sec
 
 ## アーキテクチャ上の制約
 
+- **ai-rotom はローカルビルドにパッチを当てて使う**（[ADR-0027](docs/adr/ADR-0027.md)）。`AI_ROTOM_ARGS` が `~/ai-rotom/packages/mcp-server/dist/index.mjs` を指し、そこには上流にない差分（素名解決・pnpm 化）が入る。差分の正は `patches/ai-rotom/`、再現は `scripts/setup-ai-rotom.sh`。**上流へ PR は出さない**方針なので、修正はこのリポジトリのパッチとして積む。`~/ai-rotom` を更新したらパッチを作り直すこと（手順は `patches/ai-rotom/README.md`）。
 - **Worker は 3 秒以内に応答必須**（Discord の制約）のため、`deferredResponse()` で即応答し、Pi への転送は `ctx.waitUntil()` で非同期実行する。
 - **Worker → Pi 間は Cloudflare Tunnel + Access 認証**で保護されている（`CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`）。
 - **Pi 側の AI 処理完了後、Webhook PATCH で直接 Discord の元応答を編集する**（Worker を経由しない）。
@@ -65,7 +85,7 @@ BOT トークンや CF-Access 認証情報を含む。本番では `wrangler sec
 - **ツール呼び出しループは最大30回**。
 - **ツール結果は `tool-result-formatter.ts` で整形してから LLM に渡す**（[ADR-0006](docs/adr/ADR-0006.md)）。ai-rotom の分析系ツールは出力が巨大で、`find_counters` は実測 5.7MB に達する。ツール名ごとの整形関数で「判断に効く順」へ並べ替えてから上位を残す。**先頭からの一律切り詰めを再び入れないこと**（JSON を構造の途中で壊し、並び順の意味も失われる）。整形関数を持たないツールは 5000 文字まで素通しする。
 - **ツールを追加したら整形の要否を確認する**。実出力サイズを計測してから判断すること。
-- **対戦記録ツール（`list_matches` / `get_match`）は MCP を経由しない**（[ADR-0010](docs/adr/ADR-0010.md)）。`handleToolCall` が `isMatchTool()` で分岐し、`match-repository.ts` が R2 上の Parquet を DuckDB の httpfs で直接読む。応答は MCP と同じ `{ content: [{ type, text }] }` 形にそろえてあるため、呼び出し側は違いを意識しない。**このデータに行動ログ（技・ダメージ・ターン推移）は含まれない**ので、ターン単位の分析を語らせないこと。整形が不要なのは応答が動画単位に閉じているためで（実測 1,125 文字）、全件を横断して返す変更を入れるときは測り直すこと。**URL の再生位置（`t=`）は対戦の特定に使う**ので、削らずに `list_matches` へ渡すこと。
+- **対戦記録ツール（`list_matches` / `get_match` / `get_match_turns`）は MCP を経由しない**（[ADR-0010](docs/adr/ADR-0010.md)、[ADR-0026](docs/adr/ADR-0026.md)）。`handleToolCall` が `isMatchTool()` で分岐し、`match-repository.ts` が R2 上の Parquet を DuckDB の httpfs で直接読む。応答は MCP と同じ `{ content: [{ type, text }] }` 形にそろえてあるため、呼び出し側は違いを意識しない。**行動ログは `turns.parquet`（v2: `side` / `slot` / `source`）、HP 観測は別テーブルの `boards.parquet`** に入る。相手の行動・HP は解析側が対応した動画（当面 `1UBNFA05GUU` のみ）にしか入らないので、「行が無い」を「相手が何もしなかった」と読ませない。`turns` の各ターンは `{ actions, boards }` で返し、`actions` の `side` で自分と相手を分ける。**応答サイズは測り直すこと**（`get_match_turns` は素通しだと 5,833 字で JSON が壊れたため `tool-result-formatter.ts` に整形関数を持つ。削るのは既定値と重複した `url` だけで、行動の順序・`side`・`species`・`move`・`boards` は削らない）。**URL の再生位置（`t=`）は対戦の特定に使う**ので、削らずに `list_matches` へ渡すこと。
 - **3択クイズは構造ブロックで受け渡し、正誤判定はクライアントが行う**（[ADR-0011](docs/adr/ADR-0011.md)）。AI は応答末尾の ` ```quiz ` ブロックに 5 問まとめて書き、`quiz-block.ts` が抽出して `WebAskResponse.quiz` に載せる。**本文からのブロック除去は API 境界（`toWebAskResponse` / 履歴 API）だけで行い、DB にはブロックを含む原文を保存する**。消すと AI が自分の出題を思い出せず、「さっきの 3 問目なんで？」に答えられなくなる。**抽出に失敗したら本文をいじらずそのまま表示する**（会話を止めない）。判定を LLM に戻さないこと（自分の出した正解を取り違え、正解なのに不正解と言う）。1 問ごとに LLM へ送らないこと（テンポがこの機能の本体）。Web UI 専用で、Discord とシステムプロンプトの `__discord__` 経路には出さない。
 - **パーティ系ツールは利用者ごとの名前空間を通す**（[ADR-0009](docs/adr/ADR-0009.md)）。上流はパーティを `~/.ai-rotom/parties.json` の単一ファイルに保存し、保存先を変える手段がない（パスは `os.homedir()` 固定）。`party-namespace.ts` が呼び出し時にパーティ名へ `user:{userId}/` または `discord/` を前置し、結果から外す。**接頭辞は内部表現であり、AI や利用者に見せる場面では必ず外すこと**。
 - **打ち切り時は無言で終わらせない**。ツール上限に到達した場合と Discord の締切に達した場合は、`tools` を渡さずにもう一度生成し、そこまでに集めた情報で回答をまとめさせる（`finalizeWithoutTools()`）。生成にも失敗したときだけ固定文言を返す。

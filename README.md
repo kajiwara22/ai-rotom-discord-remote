@@ -179,15 +179,33 @@ wrangler tail
 
 ### 3. Raspberry Pi 側の準備
 
+#### ai-rotom（MCP サーバー）のローカルビルド
+
+rpi-bridge は ai-rotom にローカルパッチ（素名解決・pnpm 化）を当てたビルドを使います
+（[ADR-0027](docs/adr/ADR-0027.md)）。
+
+```bash
+mise exec -- ./scripts/setup-ai-rotom.sh
+```
+
+上流を `~/ai-rotom` に clone し、`patches/ai-rotom/*.patch` を適用してビルドします。
+既に `~/ai-rotom` がある場合は削除してから実行してください（`AI_ROTOM_DIR` で別の場所も指定可）。
+
+#### rpi-bridge
+
 ```bash
 cd rpi-bridge
-cp .env.example .env
-# .env を編集（特に OPENCODE_GO_API_KEY を設定）
 
 pnpm install
 pnpm setup:duckdb # 対戦記録を使う場合のみ。初回だけ実行する（後述）
-pnpm dev          # 通常起動
-pnpm dev:inspect  # VS Code リモートデバッグ用 (port 9229)
+
+# 環境変数は mise で管理する（[環境変数の設定](#6-環境変数の設定)）
+# 1) 必要な変数と既定値は .env.example で確認する（値の仕様）
+# 2) 実値は rpi-bridge/.mise.local.toml の [env] に書く（Git 管理外）
+mise trust        # 初回のみ
+
+mise exec -- pnpm dev          # 通常起動（mise activate 済みなら pnpm dev だけでもよい）
+mise exec -- pnpm dev:inspect  # VS Code リモートデバッグ用 (port 9229)
 ```
 
 #### 対戦記録の参照設定（初回のみ）
@@ -204,7 +222,8 @@ pnpm setup:duckdb
 ```
 
 httpfs 拡張のインストールと、R2 への疎通確認（件数の取得）までを行います。
-先に `.env` の `R2_ENDPOINT_URL` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` を
+先に `rpi-bridge/.mise.local.toml` の `[env]` に
+`R2_ENDPOINT_URL` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` を
 設定しておいてください。R2 の認証情報は `pokemon-champions-chapter` の
 `fetch_parquet.sh` が使っているものと同じです。
 
@@ -316,7 +335,12 @@ npx wrangler secret put ALLOWED_CHANNEL_IDS
 # → "123456789012345678,987654321098765432"
 ```
 
-#### Raspberry Pi (`.env`)
+#### Raspberry Pi（mise）
+
+実値は `rpi-bridge/.mise.local.toml` の `[env]` に置きます（Git 管理外、`.gitignore` 済み）。
+下の `rpi-bridge/.env.example` は変数の一覧と既定値の仕様です。
+**rpi-bridge のコードは `.env` を読みません**（dotenv を使っていない）。`.env` に値を書いても反映されないため、
+`.mise.local.toml` に書いてください。設定後は `mise env` で反映を確認できます。
 
 | 変数 | 説明 | デフォルト |
 |---|---|---|
@@ -326,7 +350,7 @@ npx wrangler secret put ALLOWED_CHANNEL_IDS
 | `OPENCODE_GO_API_KEY` | OpenCode Go API キー | **(必須)** |
 | `OPENCODE_GO_BASE_URL` | API ベース URL | `https://opencode.ai/zen/go/v1` |
 | `AI_ROTOM_COMMAND` | ai-rotom MCP サーバーの起動コマンド（ADR-0019） | `npx` |
-| `AI_ROTOM_ARGS` | 起動引数（空白区切り）。未リリース main のローカルビルドを使う場合は `node` と `dist/index.mjs` のパスを指定 | `-y @nonz250/ai-rotom` |
+| `AI_ROTOM_ARGS` | 起動引数（空白区切り）。既定の運用では `scripts/setup-ai-rotom.sh` が作る `~/ai-rotom/packages/mcp-server/dist/index.mjs` を指定する（[ADR-0027](docs/adr/ADR-0027.md)） | `-y @nonz250/ai-rotom` |
 | `PARENT_PIN` | Web UI 保護者設定の初期 PIN（数字4桁） | `1234` |
 | `WEB_SESSION_TTL_DAYS` | Web チャット履歴の保持日数（Discord は 30分固定） | `30` |
 | `R2_ENDPOINT_URL` | 対戦記録を置いた R2 のエンドポイント（`https://` の有無は問わない） | (未設定なら振り返り機能のみ無効) |
@@ -431,7 +455,7 @@ Discord はチャンネルごと、Web はユーザーごとに独立したセ�
 - 期限はアクセスのたびに延長されるため、実質「**最後に使ってから N 日**」です
 - 期限切れセッションは 10 分ごとのクリーンアップで削除されます（メッセージも FK の CASCADE で消えます）
 - `/reset` またはセッションの「削除」で手動削除も可能
-- Web の保持日数は `.env` の `WEB_SESSION_TTL_DAYS` で変更できます（不正値・0以下を指定した場合は警告を出して既定の 30 日にフォールバック）
+- Web の保持日数は `rpi-bridge/.mise.local.toml` の `WEB_SESSION_TTL_DAYS` で変更できます（不正値・0以下を指定した場合は警告を出して既定の 30 日にフォールバック）
 
 TTL を延ばした後の初回起動時、旧仕様（30分）で作られた Web セッションの期限は自動で新しい保持期間へ引き延ばされます（`db.ts` の `extendWebSessionExpiry()`）。この移行がないと、設定変更直後に既存の履歴がまとめて削除されてしまいます。
 
@@ -496,7 +520,7 @@ ai-rotom-discord-remote/
 │   │   └── img/                   # ※ Git 管理対象外（スクリプトで生成）
 │   │       ├── avatars/           # 160px PNG 18枚（選択可能16種 + ball/pikachu-dance）
 │   │       └── pokemon_illust_lab_202403/  # ZIP の展開物（任意）
-│   ├── .env.example
+│   ├── .env.example               # 変数の一覧と既定値の仕様（実値は .mise.local.toml に置く）
 │   └── package.json
 ├── deploy/
 │   └── caddy/                     # Web UI の TLS 終端（Let's Encrypt / DNS-01）
@@ -506,8 +530,14 @@ ai-rotom-discord-remote/
 │       ├── .mise.toml.example     # 環境変数と操作タスク（コピーして使う）
 │       └── README.md              # 手順書・トラブルシューティング
 ├── scripts/
+│   ├── setup-ai-rotom.sh          # ai-rotom の clone + パッチ適用 + ビルド
 │   ├── setup-pokemon-assets.sh    # イラストラボ素材の展開・リサイズ
 │   └── start-opencode-web.sh
+├── patches/
+│   └── ai-rotom/                  # 上流に送らないローカル差分（ADR-0027）
+│       ├── 0001-name-resolver-bare-form-alias.patch
+│       ├── 0002-migrate-to-pnpm.patch
+│       └── README.md              # 基準コミットと追従手順
 └── docs/
     └── adr/                       # Architecture Decision Records
         ├── ADR-0001.md            # 家庭用 Web チャットアプリの設計判断
