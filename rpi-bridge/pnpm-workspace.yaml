@@ -1,3 +1,17 @@
 allowBuilds:
   better-sqlite3: true
   esbuild: false
+
+# 供給網対策（2026-10-26 追加）: 公開から3日未満のバージョンは解決しない。
+# pnpm 12 の既定は 1440（1日）。ここでは 3日（4320分）に強める。
+# 侵害リリースやタイポスクワットは公開直後が最も危険で、多くの場合
+# 数時間〜数日でレジストリから削除される。
+minimumReleaseAge: 4320
+
+# 既存 lock（2026-10-26 09:38 時点、本人が更新済み）に含まれる違反分。
+# pnpm 11.1.3 以降は既存 lock も検証するため、これが無いと install が
+# ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION で止まる。
+# 次の pnpm update で lock から外れたら minimumReleaseAgeExcludePrune が消す。
+minimumReleaseAgeExclude:
+  - '@modelcontextprotocol/sdk'
+minimumReleaseAgeExcludePrune: true

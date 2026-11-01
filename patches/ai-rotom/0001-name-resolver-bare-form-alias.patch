@@ -1,0 +1,203 @@
+From cec27ff8dbb270953ab910408c863184ef76a026 Mon Sep 17 00:00:00 2001
+From: local <local@localhost>
+Date: Tue, 27 Oct 2026 11:41:03 +0900
+Subject: [PATCH 1/2] =?UTF-8?q?local:=20=E3=83=95=E3=82=A9=E3=83=AB?=
+ =?UTF-8?q?=E3=83=A0=E4=BB=98=E3=81=8D=E7=A8=AE=E3=82=92=E7=B4=A0=E5=90=8D?=
+ =?UTF-8?q?(=E4=BE=8B:=20=E3=82=AE=E3=83=AB=E3=82=AC=E3=83=AB=E3=83=89)?=
+ =?UTF-8?q?=E3=81=A7=E8=A7=A3=E6=B1=BA=E3=81=A7=E3=81=8D=E3=82=8B=E3=82=88?=
+ =?UTF-8?q?=E3=81=86=E3=81=AB=E3=81=99=E3=82=8B?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+フォルム接尾辞付きの名前しか持たない種(例: ギルガルド(シールドフォルム))は、
+素名 ギルガルド での照合が完全一致で引っかからない。
+NameResolver に ja→en 専用のエイリアスを追加し、ベースフォーム名から
+フォルム接尾辞を剥がした素名を補完する。
+
+上流には送らず、このリポジトリのローカル差分として維持する
+(ai-rotom-discord-remote の rpi-bridge が利用)。
+---
+ .../mcp-server/src/name-resolvers.test.ts     | 40 ++++++++++++++++++
+ packages/mcp-server/src/name-resolvers.ts     | 42 ++++++++++++++++++-
+ shared/src/utils/name-resolver.test.ts        | 31 ++++++++++++++
+ shared/src/utils/name-resolver.ts             | 14 ++++++-
+ 4 files changed, 124 insertions(+), 3 deletions(-)
+ create mode 100644 packages/mcp-server/src/name-resolvers.test.ts
+
+diff --git a/packages/mcp-server/src/name-resolvers.test.ts b/packages/mcp-server/src/name-resolvers.test.ts
+new file mode 100644
+index 0000000..b0f6ee7
+--- /dev/null
++++ b/packages/mcp-server/src/name-resolvers.test.ts
+@@ -0,0 +1,40 @@
++import { describe, it, expect } from "vitest";
++import { pokemonNameResolver } from "./name-resolvers";
++
++/**
++ * pokemonNameResolver はベースフォームのフォルム接尾辞を剥がした「素名」を
++ * alias として受け付ける。素名そのものを持たない種（ギルガルド等）を
++ * 素名で引けることを検証する。
++ */
++describe("pokemonNameResolver (bare-form aliases)", () => {
++  it.each([
++    ["ギルガルド", "Aegislash"],
++    ["フラエッテ", "Floette-Eternal"],
++    ["イッカネズミ", "Maushold"],
++    ["パンプジン", "Gourgeist"],
++  ])("素名 %s は %s へ解決される", (jaName, enName) => {
++    expect(pokemonNameResolver.hasJapaneseName(jaName)).toBe(true);
++    expect(pokemonNameResolver.toEnglish(jaName)).toBe(enName);
++  });
++
++  it("フォルム付きの正式名も引き続き解決される", () => {
++    expect(pokemonNameResolver.toEnglish("ギルガルド(シールドフォルム)")).toBe(
++      "Aegislash",
++    );
++    expect(pokemonNameResolver.toEnglish("ギルガルド(ブレードフォルム)")).toBe(
++      "Aegislash-Blade",
++    );
++  });
++
++  it("素名が既存エントリの種は alias で上書きされない", () => {
++    // 「モルペコ」は素名エントリが既に存在するため、
++    // 「モルペコ(はらぺこもよう)」からの alias を足さない。
++    expect(pokemonNameResolver.toEnglish("モルペコ")).toBe("Morpeko");
++  });
++
++  it("en→ja の逆引きは素名 alias に影響されず正式名を返す", () => {
++    expect(pokemonNameResolver.toJapanese("Aegislash")).toBe(
++      "ギルガルド(シールドフォルム)",
++    );
++  });
++});
+diff --git a/packages/mcp-server/src/name-resolvers.ts b/packages/mcp-server/src/name-resolvers.ts
+index d0be871..c1cdbcb 100644
+--- a/packages/mcp-server/src/name-resolvers.ts
++++ b/packages/mcp-server/src/name-resolvers.ts
+@@ -21,7 +21,47 @@ function toNameEntries(
+   return entries;
+ }
+ 
+-export const pokemonNameResolver = new NameResolver(toNameEntries(pokemonData));
++/** pokemon.json は nameJa に加えて baseSpecies（素形判定用）を持つ。 */
++interface PokemonDataEntry {
++  readonly name: string;
++  readonly nameJa: string | null;
++  readonly baseSpecies: string | null;
++}
++
++/** 「X(フォルム)」のようなフォルム接尾辞付き名前から素名 X を抜き出す。 */
++const BARE_FORM_PATTERN = /^(.+)\([^()]*\)$/;
++
++/**
++ * pokemon 用の NameEntry を組み立てる。
++ *
++ * ai-rotom のデータには素名そのものを持たない種（例: `ギルガルド(シールドフォルム)`）が
++ * あり、素名 `ギルガルド` での照合が完全一致で引っかからない。そこでベースフォーム
++ * （`baseSpecies === null`）の名前からフォルム接尾辞を剥がした素名を alias として補完する。
++ * 素名が既存エントリとして存在する種（例: `モルペコ`）は alias を足さない。
++ */
++function toPokemonNameEntries(
++  data: readonly PokemonDataEntry[],
++): { entries: NameEntry[]; aliases: NameEntry[] } {
++  const entries = toNameEntries(data);
++  const canonicalJaNames = new Set(entries.map((e) => e.ja));
++  const aliases: NameEntry[] = [];
++  for (const entry of data) {
++    if (entry.nameJa === null) continue;
++    if (entry.baseSpecies !== null) continue;
++    const match = BARE_FORM_PATTERN.exec(entry.nameJa);
++    if (match === null) continue;
++    const bare = match[1];
++    if (bare.length === 0 || canonicalJaNames.has(bare)) continue;
++    aliases.push({ ja: bare, en: entry.name });
++  }
++  return { entries, aliases };
++}
++
++const pokemonEntries = toPokemonNameEntries(pokemonData);
++export const pokemonNameResolver = new NameResolver(
++  pokemonEntries.entries,
++  pokemonEntries.aliases,
++);
+ export const natureNameResolver = new NameResolver(toNameEntries(naturesData));
+ export const abilityNameResolver = new NameResolver(toNameEntries(abilitiesData));
+ export const itemNameResolver = new NameResolver(toNameEntries(itemsData));
+diff --git a/shared/src/utils/name-resolver.test.ts b/shared/src/utils/name-resolver.test.ts
+index 8e293b8..ad93d4b 100644
+--- a/shared/src/utils/name-resolver.test.ts
++++ b/shared/src/utils/name-resolver.test.ts
+@@ -10,6 +10,13 @@ const TEST_ENTRIES: NameEntry[] = [
+   { ja: "かえんほうしゃ", en: "Flamethrower" },
+ ];
+ 
++const TEST_ALIASES: NameEntry[] = [
++  // フォルム接尾辞を剥がした素名の補完エイリアス。
++  { ja: "ギルガルド", en: "Aegislash" },
++  // 正エントリと衝突する alias は無視される想定の検証用。
++  { ja: "リザードン", en: "Charizard-Overridden" },
++];
++
+ describe("NameResolver", () => {
+   const resolver = new NameResolver(TEST_ENTRIES);
+ 
+@@ -64,4 +71,28 @@ describe("NameResolver", () => {
+       expect(resolver.size).toBe(TEST_ENTRIES.length);
+     });
+   });
++
++  describe("aliases", () => {
++    const aliasedResolver = new NameResolver(TEST_ENTRIES, TEST_ALIASES);
++
++    it("should resolve a bare alias to its canonical English name", () => {
++      expect(aliasedResolver.hasJapaneseName("ギルガルド")).toBe(true);
++      expect(aliasedResolver.toEnglish("ギルガルド")).toBe("Aegislash");
++    });
++
++    it("should not override an existing entry with a colliding alias", () => {
++      expect(aliasedResolver.toEnglish("リザードン")).toBe("Charizard");
++    });
++
++    it("should not affect the en→ja reverse mapping", () => {
++      // 既存エントリの逆引きは alias に影響されない。
++      expect(aliasedResolver.toJapanese("Charizard")).toBe("リザードン");
++      // alias のみの en は逆引きに登録されない。
++      expect(aliasedResolver.toJapanese("Aegislash")).toBeUndefined();
++    });
++
++    it("should include bare aliases in similar-name suggestions", () => {
++      expect(aliasedResolver.suggestSimilar("ギルガルソ")).toContain("ギルガルド");
++    });
++  });
+ });
+diff --git a/shared/src/utils/name-resolver.ts b/shared/src/utils/name-resolver.ts
+index 83a49fc..3911d4a 100644
+--- a/shared/src/utils/name-resolver.ts
++++ b/shared/src/utils/name-resolver.ts
+@@ -8,10 +8,20 @@ export class NameResolver {
+   private readonly enToJa: Map<string, string>;
+   private readonly jaNames: string[];
+ 
+-  constructor(entries: NameEntry[]) {
++  /**
++   * @param entries  正規の日英名エントリ。en→ja の逆引きは entries のみから構築する。
++   * @param aliases  ja→en の補完エイリアス（例: フォルム接尾辞を剥がした素名）。
++   *                 日本語名が既存エントリと衝突する場合は無視され、en→ja の逆引きには含めない。
++   */
++  constructor(entries: NameEntry[], aliases: NameEntry[] = []) {
+     this.jaToEn = new Map(entries.map((e) => [e.ja, e.en]));
++    for (const alias of aliases) {
++      if (!this.jaToEn.has(alias.ja)) {
++        this.jaToEn.set(alias.ja, alias.en);
++      }
++    }
+     this.enToJa = new Map(entries.map((e) => [e.en, e.ja]));
+-    this.jaNames = entries.map((e) => e.ja);
++    this.jaNames = [...entries.map((e) => e.ja), ...aliases.map((a) => a.ja)];
+   }
+ 
+   toEnglish(jaName: string): string | undefined {
+-- 
+2.47.3
+
