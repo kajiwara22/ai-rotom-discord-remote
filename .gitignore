@@ -54,5 +54,8 @@ build/
 archify/
 
 # Mise
+# 秘密情報を含む Caddy 用などは除外する。ルートの .mise.toml は node と pnpm の
+# 管理ファイルとして Git に含める（Renovate が見る）。
 .mise.toml
 .mise.local.toml
+!/.mise.toml
