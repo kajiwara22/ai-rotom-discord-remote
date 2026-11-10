@@ -1,0 +1,33 @@
+name: typecheck
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: typecheck-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [worker, rpi-bridge]
+    steps:
+      - uses: actions/checkout@v7
+
+      # node のバージョンは .mise.toml を正とする（Renovate が更新する）。
+      - uses: jdx/mise-action@v5
+
+      # 型チェックだけなので install script は動かさない。
+      # better-sqlite3 / esbuild のビルドを挟まず CI を速く保つ。
+      - name: npm ci
+        working-directory: ${{ matrix.package }}
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: tsc --noEmit
+        working-directory: ${{ matrix.package }}
+        run: npx tsc --noEmit

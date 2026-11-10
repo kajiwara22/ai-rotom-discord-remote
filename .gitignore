@@ -38,4 +38,7 @@ docs/ui-mock/
 .playwright-cli/
 
 # Mise
+# 秘密情報を含む Caddy 用などは除外する。ただしルートの .mise.toml は
+# node バージョンの管理ファイルとして Git に含める（Renovate が見る）。
 .mise.toml
+!/.mise.toml

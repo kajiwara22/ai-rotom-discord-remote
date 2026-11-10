@@ -1,0 +1,8 @@
+# Renovate がここを見て node を更新する（renovate.json の mise manager）。
+# 秘密情報やマシン固有の値は .mise.local.toml に置く（Git 管理外）。
+#
+# 注意: サブディレクトリの .mise.local.toml に [tools] node があると、
+# そちらが優先されてこのファイルの更新が反映されない。プロジェクトの
+# node バージョンはこのファイルに一本化すること。
+[tools]
+node = "26"
