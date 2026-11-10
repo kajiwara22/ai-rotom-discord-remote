@@ -98,6 +98,7 @@ BOT トークンや CF-Access 認証情報を含む。本番では `wrangler sec
 - **進捗は種別（`kind`）と対象名だけを送り、文言はクライアントが組み立てる**。ツール名を画面に出さないため。ツールを追加したら `tool-progress.ts` の分類と `app.js` の語彙テーブル（`L.kids` / `L.junior` の `progress`）を確認すること。
 - **Caddy 経由では SSE を圧縮対象から外す**必要がある（`deploy/caddy/Caddyfile` の `encode` の `match`）。圧縮を挟むとイベントがバッファに溜まる。
 - **Web API のフィールドは snake_case**。内部の camelCase は API 境界で変換する（`index.ts` の `toWebAskResponse()`）。`types.ts` の `WebAskResponse` を実際に使って型で守ること。
+- **構築メモの閲覧（`/docs/`）は rpi-bridge の読み取り専用ルートで配信する**（[ADR-0028](docs/adr/ADR-0028.md)）。`docs-site.ts` が `docs/` 配下の Markdown と目次 JSON を返し、描画はブラウザ側の `marked` が行う。パスは `resolve` したうえで `docs/` の前方一致で検証し、外に出る要求は 403。**目次は固定リストにせず毎回 `docs/` を走査する**（ファイルを足せば目次に出る）。見出し ID は h2 の出現順 `s1`, `s2`, ... で、`_toc.json` と本文描画の付番を一致させること。書き込み API は作らない。
 
 ## rpi-bridge: better-sqlite3
 

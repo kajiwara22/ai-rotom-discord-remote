@@ -46,6 +46,7 @@ import { createExecuteRaw, createRunTool, type ExecuteRaw, type RunTool } from "
 import { webNamespace } from "./party-namespace.js";
 import { inspectReviewInput, buildEvaluatorMessagesFromTools, parseVerdict } from "./review-harness.js";
 import { saveMatchReview, buildMatchReview } from "./match-reviews.js";
+import { handleDocs } from "./docs-site.js";
 
 const PORT = parseInt(process.env.PORT ?? "3210", 10);
 const HOST = process.env.HOST ?? "127.0.0.1";
@@ -142,6 +143,11 @@ async function main(): Promise<void> {
 
     const url = req.url ?? "/";
     const method = req.method ?? "GET";
+
+    // 構築メモ（docs/ 配下の Markdown 閲覧）。読み取り専用（ADR-0028）
+    if (method === "GET" && handleDocs(url, res)) {
+      return;
+    }
 
     // 静的ファイル配信
     if (method === "GET" && (url === "/" || url.startsWith("/public/"))) {
@@ -457,6 +463,7 @@ async function main(): Promise<void> {
     console.log(`MCP Bridge HTTP サーバー起動: http://${BIND_HOST}:${PORT}`);
     console.log(`エンドポイント:`);
     console.log(`  GET  /                    - WebチャットUI`);
+    console.log(`  GET  /docs/                - 構築メモ（docs/ の閲覧）`);
     console.log(`  GET  /health              - ヘルスチェック`);
     console.log(`  GET  /tools               - ツール一覧`);
     console.log(`  POST /tools/:name          - ツール実行(生)`);

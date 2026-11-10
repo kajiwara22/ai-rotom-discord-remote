@@ -1,0 +1,25 @@
+{
+  "name": "構築メモ",
+  "short_name": "構築メモ",
+  "description": "docs/concepts の構築メモ・選出ルールを読むためのビューア",
+  "start_url": "/docs/",
+  "scope": "/docs/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FBFAF7",
+  "theme_color": "#F2542D",
+  "icons": [
+    {
+      "src": "/docs/_icon-180.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/docs/_icon-180.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

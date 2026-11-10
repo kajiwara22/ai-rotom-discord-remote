@@ -90,6 +90,20 @@ Web UI は Pi が直接配信するため、Discord / Worker を経由しませ�
 - **ダークモード** — 自動（OS 設定）／ライト／ダーク
 - **モバイル対応** — サイドバーはドロワー化、`safe-area` 対応
 
+### 構築メモの閲覧（`/docs/`）
+
+`docs/` 配下の Markdown（構築メモ・選出ルール・ADR）を、iPhone などのブラウザから読むためのビューアです。
+
+| URL | 内容 |
+|---|---|
+| `https://rotom.<家庭用ドメイン>/docs/` | 目次。「選出」「チェックリスト」「禁止対面」を含む見出しは「すぐ見る」に上がる |
+| `/docs/#/concepts/メガリザードンYv0.1.md?h=s3` | 本文。`h` は h2 の出現順（目次の各項目がこの形のリンクを持つ） |
+
+- **`docs/` のファイルを保存すれば、次に開いたときに反映されます。** ビルドもコピーも再起動も不要です
+- Safari の「ホーム画面に追加」でフルスクリーン起動できます（`manifest.webmanifest`）
+- 右上の `Aa` で文字サイズ（標準→大→小）、太陽のアイコンでテーマ（自動→ライト→ダーク）を切り替えます
+- 配信は**読み取り専用**で、`docs/` の外へは出ません（[ADR-0028](docs/adr/ADR-0028.md)）
+
 ### 保護者向け設定（PIN ロック）
 
 ヘッダー右端の小さな歯車から、**4桁 PIN** を入力して開きます。
@@ -503,6 +517,7 @@ ai-rotom-discord-remote/
 ├── rpi-bridge/                    # Raspberry Pi サーバー
 │   ├── src/
 │   │   ├── index.ts               # HTTP サーバー + MCP Client + 全 API ルート
+│   │   ├── docs-site.ts           # docs/ の配信と目次生成（読み取り専用）
 │   │   ├── ai-service.ts          # AI 処理 (OpenCode Go API + ツール呼出ループ)
 │   │   ├── conversation-manager.ts # セッション/ユーザー/プロンプト/PIN 管理
 │   │   ├── discord-webhook.ts     # Discord Webhook 応答編集
@@ -517,6 +532,7 @@ ai-rotom-discord-remote/
 │   │   ├── style.css              # モード切替を含む全スタイル
 │   │   ├── app.js                 # UI ロジック・API 通信
 │   │   ├── marked.js              # Markdown パーサ
+│   │   ├── docs/                  # 構築メモのビューア（/docs/）
 │   │   └── img/                   # ※ Git 管理対象外（スクリプトで生成）
 │   │       ├── avatars/           # 160px PNG 18枚（選択可能16種 + ball/pikachu-dance）
 │   │       └── pokemon_illust_lab_202403/  # ZIP の展開物（任意）
@@ -539,6 +555,7 @@ ai-rotom-discord-remote/
 │       ├── 0002-migrate-to-pnpm.patch
 │       └── README.md              # 基準コミットと追従手順
 └── docs/
+    ├── concepts/                  # 構築メモ・選出ルール（/docs/ で閲覧する）
     └── adr/                       # Architecture Decision Records
         ├── ADR-0001.md            # 家庭用 Web チャットアプリの設計判断
         └── ADR-0002.md            # Web UI の TLS 終端と証明書取得方式
@@ -550,6 +567,7 @@ ai-rotom-discord-remote/
 - 保護者設定の PIN はサーバー側で検証されますが、これは**子どもの誤操作を防ぐためのもの**であり、本格的なアクセス制御ではありません
 - PIN と保護者トークンを LAN 上に平文で流さないため、[Web UI の HTTPS 化](#5-web-ui-の-https-化推奨)を推奨します（家庭内の Wi-Fi にはゲストや子どもの端末も接続します）
 - インターネットに公開する場合は、Cloudflare Access など前段の認証を必ず併用してください
+- `/docs/` も同じ前提で認証を持ちません。配信は `docs/` 配下の Markdown の読み取りだけで、書き込み API はありません
 - AI の応答は Markdown として描画されますが、変換前に `<` `>` をエスケープしているため、応答やツール結果に含まれる生 HTML は実行されません
 
 ## 素材のライセンス
