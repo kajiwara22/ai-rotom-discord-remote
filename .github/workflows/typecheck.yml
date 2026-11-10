@@ -16,13 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - package: worker
-            install: npm ci --ignore-scripts --no-audit --no-fund
-            check: npx tsc --noEmit
-          - package: rpi-bridge
-            install: pnpm install --frozen-lockfile --ignore-scripts
-            check: pnpm exec tsc --noEmit
+        package: [worker, rpi-bridge]
     steps:
       - uses: actions/checkout@v7
 
@@ -31,10 +25,16 @@ jobs:
 
       # 型チェックだけなので install script は動かさない。
       # better-sqlite3 / esbuild のビルドを挟まず CI を速く保つ。
-      - name: install
-        working-directory: ${{ matrix.package }}
-        run: ${{ matrix.install }}
+      - name: install (worker)
+        if: matrix.package == 'worker'
+        working-directory: worker
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: install (rpi-bridge)
+        if: matrix.package == 'rpi-bridge'
+        working-directory: rpi-bridge
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: tsc --noEmit
         working-directory: ${{ matrix.package }}
-        run: ${{ matrix.check }}
+        run: npx tsc --noEmit
